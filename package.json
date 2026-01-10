@@ -1,0 +1,67 @@
+{
+  "name": "@typescriptprime/securereq",
+  "type": "module",
+  "version": "0.0.0",
+  "description": "SecureReq is a lightweight utility for making secure HTTP requests, implemented in TypeScript",
+  "keywords": [
+    "https",
+    "helper",
+    "utilities",
+    "http",
+    "tls"
+  ],
+  "scripts": {
+    "build:esbuild": "tsx builder.ts",
+    "build:tsc": "tsc sources/index.ts --outDir dist/types --declaration --emitDeclarationOnly",
+    "build": "npm run build:esbuild && npm run build:tsc",
+    "lint": "eslint . --ext .ts",
+    "test": "ava"
+  },
+  "exports": {
+    ".": {
+      "node": "./dist/index.js",
+      "types": "./dist/types/index.d.ts"
+    }
+  },
+  "files": [
+    "dist/**/*",
+    "LICENSE",
+    "README.md"
+  ],
+  "license": "Apache-2.0",
+  "ava": {
+    "files": [
+      "tests/**/*.test.ts"
+    ],
+    "nodeArguments": [
+      "--import=tsx"
+    ],
+    "workerThreads": false,
+    "typescript": {
+      "rewritePaths": {
+        "@/": "./sources/"
+      },
+      "compile": false
+    }
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TypescriptPrime/SecureReq.git"
+  },
+  "devDependencies": {
+    "@ava/typescript": "^6.0.0",
+    "@types/node": "^24.10.4",
+    "ava": "^6.4.1",
+    "esbuild": "^0.27.2",
+    "eslint": "^9.39.2",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.52.0"
+  },
+  "dependencies": {
+    "zod": "^4.3.5"
+  }
+}
