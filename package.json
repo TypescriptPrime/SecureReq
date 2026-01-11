@@ -12,7 +12,7 @@
   ],
   "scripts": {
     "build:esbuild": "tsx builder.ts",
-    "build:tsc": "tsc sources/index.ts --outDir dist/types --declaration --emitDeclarationOnly",
+    "build:tsc": "tsc sources/index.ts --outDir dist/types --declaration --emitDeclarationOnly --esModuleInterop --allowSyntheticDefaultImports",
     "build": "npm run build:esbuild && npm run build:tsc",
     "lint": "eslint . --ext .ts",
     "test": "ava"

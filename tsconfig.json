@@ -6,6 +6,8 @@
     "removeComments": false,
     "alwaysStrict": false,
     "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
     "resolveJsonModule": true,
     "paths": {
       "@/*": ["./sources/*"]
