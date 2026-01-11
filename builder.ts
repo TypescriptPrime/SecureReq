@@ -7,5 +7,7 @@ await ESBuild.build({
   outdir: 'dist',
   sourcemap: 'linked',
   format: 'esm',
-  external: []
+  external: [],
+  bundle: true,
+  splitting: true
 })
