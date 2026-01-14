@@ -1,145 +1,105 @@
-# @typescriptprime/parsing
+# SecureReq 🔐
 
-Lightweight helper utilities for parsing CLI-style arguments, implemented in TypeScript.
-
-This package provides two small helpers:
-
-- `PreProcessing` — trims `process.argv` to remove the node executable and optional script filename, returning the array of option tokens.
-- `PostProcessing` — parses the token list that looks like `--Name Value` into a typed options object and an array of positional arguments (everything after `--`).
+**SecureReq** is a lightweight TypeScript utility for making secure HTTPS requests with strict TLS defaults and typed response parsing.
 
 ---
 
-## 📦 Install
+## 🚀 Quick Summary
+
+- **Small, dependency-light** wrapper around Node's `https` for typed responses and safer TLS defaults.
+- Defaults to **TLSv1.3**, Post Quantum Cryptography key exchange, a limited set of strongest ciphers, and a `User-Agent` header.
+- Supports typed response parsing: `JSON`, `String`, or raw `ArrayBuffer`.
+
+---
+
+## 📦 Installation
 
 ```bash
-npm install @typescriptprime/parsing
+npm install @typescriptprime/securereq
 ```
 
-> [!NOTE]
-> This repo is authored as an ES module and fully typed with TypeScript.
+**Requirements:** Node.js >= 24
 
 ---
 
-## Usage
+## Usage Examples 🔧
 
-Import the helpers from the package and combine them to parse `process.argv`:
-
-```typescript
-import { PreProcessing, PostProcessing } from '@typescriptprime/parsing'
-
-async function Main(Argv: string[]) {
-  // Step 1: Trim the node executable and optional script path
-  const Filtered = PreProcessing(Argv)
-
-  // Step 2: Parse CLI-style parameters into an options object and positional arguments
-  const { Options, Positional } = await PostProcessing(Filtered)
-
-  console.log('Options:', Options)
-  console.log('Positional args:', Positional)
-}
-
-Main(process.argv)
-```
-
-### Naming Convention
-
-By default, `PostProcessing` converts parameter names into PascalCase using `es-toolkit` (so `--parameter-name` becomes `ParameterName`). You can supply a custom `NamingConvention` function via `IParsingOptions`:
-
-```typescript
-import * as ESToolkit from 'es-toolkit'
-
-await PostProcessing(argv, { NamingConvention: ESToolkit.camelCase })
-// or custom:
-await PostProcessing(argv, { NamingConvention: (s) => s.replace(/^--/, '') })
-```
-
----
-
-## ⚡ Quick Examples
-
-From `process.argv` in Node.js:
-
-```typescript
-const Argv = ['/usr/local/bin/node', '/path/to/script.js', '--enable-feature', '--parameter', 'value', '--', 'positional1', 'positional2']
-
-const Tokens = PreProcessing(Argv)
-// tokens === ['--enable-feature', '--parameter', 'value', '--', 'positional1', 'positional2']
-
-const { Options, Positional } = await PostProcessing(Tokens)
-// Options === { EnableFeature: true, Parameter: 'value' }
-// Positional === ['positional1', 'positional2']
-```
-
-Boolean flags example:
+Import and call the helper:
 
 ```ts
-const Tokens = PreProcessing(['/usr/bin/node', '/script.js', '--flag', '--other', 'value'])
-// tokens === ['--flag', '--other', 'value']
-const { Options } = await PostProcessing(Tokens)
-// Options === { Flag: true, Other: 'value' }
+import { HTTPSRequest } from '@typescriptprime/securereq'
+
+// JSON (auto-detected by .json path) or explicit
+const url = new URL('https://api64.ipify.org?format=json')
+const res = await HTTPSRequest(url)
+console.log(res.StatusCode) // number
+console.log(res.Body) // ArrayBuffer or parsed JSON depending on `ExpectedAs` and URL
+
+// Force string
+const html = await HTTPSRequest(new URL('https://www.example.com/'), { ExpectedAs: 'String' })
+console.log(typeof html.Body) // 'string'
+
+// Force ArrayBuffer
+const raw = await HTTPSRequest(new URL('https://example.com/'), { ExpectedAs: 'ArrayBuffer' })
+console.log(raw.Body instanceof ArrayBuffer)
 ```
 
 ---
 
-## API
+## API Reference 📚
 
-- `PreProcessing(argv: typeof process.argv): string[]`
-  - Removes the node executable and optional file argument and returns the tokens starting at the first option.
+### HTTPSRequest(Url, Options?)
 
-- `PostProcessing<I extends JSONValue>(Args: string[], FuncOptions?: IParsingOptions): Promise<{ Options: I, Positional: string[] }>`
-  - Converts `--key value` pairs into a typed `Options` object; flags without values are treated as `true`.
-  - Stops parsing options when it hits `--` and returns the rest as `Positional` arguments.
+- `Url: URL` — Target URL (must be an instance of `URL`).
+- `Options?: HTTPSRequestOptions` — Optional configuration object.
 
-### Types
+Returns: `Promise<HTTPSResponse<T>>` where `T` is determined by `ExpectedAs`.
 
-- `JSONValue`, `JSONObject`, `JSONArray`, `JSONPrimitive` — standard JSON type helpers
-- `IParsingOptions` — currently supports:
-  - `NamingConvention?: (PropertyName: string) => string | Promise<string>`
+Throws:
+- `TypeError` when `Url` is not a `URL` instance.
+- `Error` on request failure or on failed response parsing (e.g., invalid JSON).
 
----
+### HTTPSRequestOptions
 
-## Scripts
+Fields:
+- `TLS?: { IsHTTPSEnforced?: boolean, MinTLSVersion?: 'TLSv1.2'|'TLSv1.3', MaxTLSVersion?: 'TLSv1.2'|'TLSv1.3', Ciphers?: string[], KeyExchanges?: string[] }`
+  - Defaults: `IsHTTPSEnforced: true`, both Min and Max set to `TLSv1.3`, a small secure cipher list and key exchange choices.
+  - When `IsHTTPSEnforced` is `true`, a non-`https:` URL will throw.
+- `HttpHeaders?: Record<string,string>` — Custom headers. A `User-Agent` header is provided by default.
+- `ExpectedAs?: 'JSON'|'String'|'ArrayBuffer'` — How to parse the response body.
 
-- `npm run build` — runs: `esbuild` to bundle the compiled JS and TypeScript compiler to emit declarations.
-- `npm test` — runs AVA tests.
-- `npm run lint` — runs ESLint checks.
+### HTTPSResponse
 
-This project is published as an ES module. If you are developing locally, the following commands are useful:
+- `{ StatusCode: number, Headers: Record<string,string|string[]|undefined>, Body: T }`
 
-- `npm run build:esbuild` — bundle with esbuild (JS output)
-- `npm run build:tsc` — emit TypeScript declarations only
-
-The package `exports` are configured in `package.json` so importing the default entry works with ESM loaders.
-
----
-
-## Tests
-
-The `tests/` directory contains unit tests for both `PreProcessing` and `PostProcessing` with AVA. They include:
-
-- PreProcessing: removes node executable and file name using different `process.argv` shapes
-- PostProcessing: parsing single/two parameters, boolean flags, and the `--` positional argument separator.
-
-Run tests with:
-
-```bash
-npm test
-```
+Notes:
+- If `ExpectedAs` is omitted, a heuristic is used: `.json` → `JSON`, `.txt` → `String`, otherwise `ArrayBuffer`.
+- When `ExpectedAs` is `JSON`, the body is parsed and an error is thrown if parsing fails.
 
 ---
 
-## Project Layout
+## Security & Behavior Notes 🔐
 
-- `sources/` — TypeScript source files for the package
-  - `index.ts` — entry exports
-  - `preprocessing/index.ts` — `PreProcessing` implementation
-  - `postprocessing/index.ts` — `PostProcessing` implementation
-  - `types.ts` — JSON types and `IParsingOptions`
-- `dist/` — build output (ignored in source control)
-- `tests/` — unit tests using AVA
+- Strict TLS defaults lean on **TLSv1.3** and a reduced cipher list to encourage secure transport out of the box.
+- TLS options are forwarded to Node's HTTPS layer (`minVersion`, `maxVersion`, `ciphers`, `ecdhCurve`).
+- The library uses `zod` for runtime validation of options.
+
+---
+
+## Development & Testing 🧪
+
+- Build: `npm run build` (uses `esbuild` + `tsc` for types)
+- Test: `npm test` (uses `ava`)
+- Lint: `npm run lint`
+
+---
+
+## Contributing
+
+Contributions, bug reports and PRs are welcome — please follow the repository's contribution guidelines.
 
 ---
 
 ## License
 
-Licensed under the Apache-2.0 license — see `LICENSE` for details.
+This project is licensed under the **Apache-2.0** License. See the `LICENSE` file for details.
