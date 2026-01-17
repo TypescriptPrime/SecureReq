@@ -28,7 +28,7 @@ export async function HTTPSRequest<E extends ExpectedAsKey = 'ArrayBuffer'>(Url:
       Ciphers: ['TLS_AES_256_GCM_SHA384', 'TLS_CHACHA20_POLY1305_SHA256'],
       KeyExchanges: ['X25519MLKEM768', 'X25519'],
     },
-    HTTPMethod: 'GET',
+    HttpMethod: 'GET',
     HttpHeaders: {
       'User-Agent': `node/${Process.version} ${Process.platform} ${Process.arch} workspace/false`,
     },
@@ -48,7 +48,7 @@ export async function HTTPSRequest<E extends ExpectedAsKey = 'ArrayBuffer'>(Url:
       KeyExchanges: Zod.array(Zod.string()).optional()
     }).partial().optional(),
     HttpHeaders: Zod.record(Zod.string(), Zod.string()).optional(),
-    HTTPMethod: Zod.enum(['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS']).optional(),
+    HttpMethod: Zod.enum(['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS']).optional(),
     ExpectedAs: Zod.enum(['JSON', 'String', 'ArrayBuffer']).optional()
   }).parseAsync(Options ?? {})
   
@@ -69,7 +69,7 @@ export async function HTTPSRequest<E extends ExpectedAsKey = 'ArrayBuffer'>(Url:
       maxVersion: MergedOptions.TLS?.MaxTLSVersion,
       ciphers: MergedOptions.TLS?.Ciphers?.join(':'),
       ecdhCurve: MergedOptions.TLS?.KeyExchanges?.join(':'),
-      method: MergedOptions.HTTPMethod,
+      method: MergedOptions.HttpMethod,
     }, (Res) => {
       const Chunks: ArrayBuffer[] = []
       Res.on('data', (Chunk) => {
@@ -134,7 +134,7 @@ export async function HTTPS2Request<E extends ExpectedAsKey = 'ArrayBuffer'>(Url
     HttpHeaders: {
       'User-Agent': `node/${Process.version} ${Process.platform} ${Process.arch} workspace/false`,
     },
-    HTTPMethod: 'GET'
+    HttpMethod: 'GET'
   } as const
 
   const MergedOptions = { ...DefaultOptions, ...(Options ?? {}) } as HTTPSRequestOptions<E>
@@ -152,7 +152,7 @@ export async function HTTPS2Request<E extends ExpectedAsKey = 'ArrayBuffer'>(Url
     }).partial().optional(),
     HttpHeaders: Zod.record(Zod.string(), Zod.string()).optional(),
     ExpectedAs: Zod.enum(['JSON', 'String', 'ArrayBuffer']).optional(),
-    HTTPMethod: Zod.enum(['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS']).optional()
+    HttpMethod: Zod.enum(['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS']).optional()
   }).parseAsync(Options ?? {})
 
   if (MergedOptions.TLS?.IsHTTPSEnforced && Url.protocol !== 'https:') {
@@ -181,7 +181,7 @@ export async function HTTPS2Request<E extends ExpectedAsKey = 'ArrayBuffer'>(Url
     })
 
     const RequestHeaders: HTTP2.OutgoingHttpHeaders = {
-      ':method': MergedOptions.HTTPMethod,
+      ':method': MergedOptions.HttpMethod,
       ':path': Url.pathname + Url.search,
       ':scheme': 'https',
       ':authority': Url.host,
