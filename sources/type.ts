@@ -9,6 +9,7 @@ interface TLSOptions {
 export interface HTTPSRequestOptions<E extends ExpectedAsKey = ExpectedAsKey> {
   TLS?: TLSOptions,
   HttpHeaders?: Record<string, string>,
+  HTTPMethod?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'HEAD' | 'OPTIONS',
   ExpectedAs?: E
 }
 
