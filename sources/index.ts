@@ -49,6 +49,7 @@ export async function HTTPSRequest<E extends ExpectedAsKey = 'ArrayBuffer'>(Url:
     }).partial().optional(),
     HttpHeaders: Zod.record(Zod.string(), Zod.string()).optional(),
     HttpMethod: Zod.enum(['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS']).optional(),
+    Payload: Zod.union([Zod.string(), Zod.instanceof(ArrayBuffer), Zod.instanceof(Uint8Array)]).optional(),
     ExpectedAs: Zod.enum(['JSON', 'String', 'ArrayBuffer']).optional()
   }).parseAsync(Options ?? {})
   
@@ -56,10 +57,14 @@ export async function HTTPSRequest<E extends ExpectedAsKey = 'ArrayBuffer'>(Url:
     throw new Error('HTTPS is enforced, but the URL protocol is not HTTPS')
   }
 
+  if (MergedOptions.Payload && !['POST', 'PUT', 'PATCH', 'OPTIONS'].includes(MergedOptions.HttpMethod ?? 'GET')) {
+    throw new Error('Request payload is only supported for POST, PUT, PATCH, and OPTIONS methods')
+  }
+
   const ExpectedAs = (Options?.ExpectedAs ?? (Url.pathname.endsWith('.json') ? 'JSON' : Url.pathname.endsWith('.txt') ? 'String' : 'ArrayBuffer')) as E
 
   const HTTPSResponse = await new Promise<HTTPSResponse<ExpectedAsMap[E]>>((Resolve, Reject) => {
-    const HTTPSRequestInstance = HTTPS.get({
+    const HTTPSRequestInstance = HTTPS.request({
       protocol: Url.protocol,
       hostname: Url.hostname,
       port: Url.port,
@@ -104,6 +109,18 @@ export async function HTTPSRequest<E extends ExpectedAsKey = 'ArrayBuffer'>(Url:
     HTTPSRequestInstance.on('error', (Error) => {
       Reject(Error)
     })
+
+    if (MergedOptions.Payload !== undefined) {
+      if (typeof MergedOptions.Payload === 'string') {
+        HTTPSRequestInstance.write(MergedOptions.Payload)
+      } else if (MergedOptions.Payload instanceof ArrayBuffer) {
+        HTTPSRequestInstance.write(MergedOptions.Payload)
+      } else if (MergedOptions.Payload instanceof Uint8Array) {
+        HTTPSRequestInstance.write(MergedOptions.Payload)
+      }
+    }
+
+    HTTPSRequestInstance.end()
   })
 
   return HTTPSResponse
@@ -152,11 +169,16 @@ export async function HTTPS2Request<E extends ExpectedAsKey = 'ArrayBuffer'>(Url
     }).partial().optional(),
     HttpHeaders: Zod.record(Zod.string(), Zod.string()).optional(),
     ExpectedAs: Zod.enum(['JSON', 'String', 'ArrayBuffer']).optional(),
-    HttpMethod: Zod.enum(['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS']).optional()
+    HttpMethod: Zod.enum(['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS']).optional(),
+    Payload: Zod.union([Zod.string(), Zod.instanceof(ArrayBuffer), Zod.instanceof(Uint8Array)]).optional()
   }).parseAsync(Options ?? {})
 
   if (MergedOptions.TLS?.IsHTTPSEnforced && Url.protocol !== 'https:') {
     throw new Error('HTTPS is enforced, but the URL protocol is not HTTPS')
+  }
+
+  if (MergedOptions.Payload && !['POST', 'PUT', 'PATCH', 'OPTIONS'].includes(MergedOptions.HttpMethod ?? 'GET')) {
+    throw new Error('Request payload is only supported for POST, PUT, PATCH, and OPTIONS methods')
   }
 
   const ExpectedAs = (Options?.ExpectedAs ?? (Url.pathname.endsWith('.json') ? 'JSON' : Url.pathname.endsWith('.txt') ? 'String' : 'ArrayBuffer')) as E
@@ -240,6 +262,16 @@ export async function HTTPS2Request<E extends ExpectedAsKey = 'ArrayBuffer'>(Url
       HTTP2Session.close()
       Reject(Error)
     })
+
+    if (MergedOptions.Payload !== undefined) {
+      if (typeof MergedOptions.Payload === 'string') {
+        Request.write(MergedOptions.Payload)
+      } else if (MergedOptions.Payload instanceof ArrayBuffer) {
+        Request.write(MergedOptions.Payload)
+      } else if (MergedOptions.Payload instanceof Uint8Array) {
+        Request.write(MergedOptions.Payload)
+      }
+    }
 
     Request.end()
   })
