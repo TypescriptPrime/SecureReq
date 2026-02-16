@@ -6,16 +6,9 @@
     "removeComments": false,
     "alwaysStrict": false,
     "skipLibCheck": true,
-    "esModuleInterop": true,
-    "allowSyntheticDefaultImports": true,
     "resolveJsonModule": true,
     "paths": {
       "@/*": ["./sources/*"]
     }
-  },
-  "include": [
-    "sources/**/*.ts",
-    "tests/**/*.test.ts",
-    "builder.ts"
-  ]
+  }
 }

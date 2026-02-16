@@ -11,9 +11,7 @@
     "tls"
   ],
   "scripts": {
-    "build:esbuild": "tsx builder.ts",
-    "build:tsc": "tsc sources/index.ts --outDir dist/types --declaration --emitDeclarationOnly --esModuleInterop --allowSyntheticDefaultImports",
-    "build": "npm run build:esbuild && npm run build:tsc",
+    "build": "tsc -p sources/tsconfig.json",
     "lint": "eslint . --ext .ts",
     "test": "ava"
   },
@@ -23,6 +21,7 @@
       "types": "./dist/types/index.d.ts"
     }
   },
+  "types": "./dist/types/index.d.ts",
   "files": [
     "dist/**/*",
     "LICENSE",
@@ -53,15 +52,14 @@
   },
   "devDependencies": {
     "@ava/typescript": "^6.0.0",
-    "@types/node": "^24.10.4",
+    "@types/node": "^24.10.13",
     "ava": "^6.4.1",
-    "esbuild": "^0.27.2",
-    "eslint": "^9.39.2",
+    "eslint": "^10.0.0",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.52.0"
+    "typescript-eslint": "^8.56.0"
   },
   "dependencies": {
-    "zod": "^4.3.5"
+    "zod": "^4.3.6"
   }
 }
