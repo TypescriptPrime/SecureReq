@@ -12,7 +12,7 @@
   ],
   "scripts": {
     "build": "tsc -p sources/tsconfig.json",
-    "lint": "eslint . --ext .ts",
+    "lint": "eslint",
     "test": "ava"
   },
   "exports": {
@@ -53,6 +53,8 @@
   "devDependencies": {
     "@ava/typescript": "^6.0.0",
     "@types/node": "^24.10.13",
+    "@typescript-eslint/eslint-plugin": "^8.56.0",
+    "@typescript-eslint/parser": "^8.56.0",
     "ava": "^6.4.1",
     "eslint": "^10.0.0",
     "tsx": "^4.21.0",
