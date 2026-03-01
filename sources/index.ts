@@ -57,8 +57,8 @@ export async function HTTPSRequest<E extends ExpectedAsKey = 'ArrayBuffer'>(Url:
     throw new Error('HTTPS is enforced, but the URL protocol is not HTTPS')
   }
 
-  if (MergedOptions.Payload && !['POST', 'PUT', 'PATCH', 'OPTIONS'].includes(MergedOptions.HttpMethod ?? 'GET')) {
-    throw new Error('Request payload is only supported for POST, PUT, PATCH, and OPTIONS methods')
+  if (MergedOptions.Payload && !['GET', 'POST', 'PUT', 'PATCH', 'OPTIONS'].includes(MergedOptions.HttpMethod ?? 'GET')) {
+    throw new Error('Request payload is only supported for GET, POST, PUT, PATCH, and OPTIONS methods')
   }
 
   const ExpectedAs = (Options?.ExpectedAs ?? (Url.pathname.endsWith('.json') ? 'JSON' : Url.pathname.endsWith('.txt') ? 'String' : 'ArrayBuffer')) as E
@@ -177,8 +177,8 @@ export async function HTTPS2Request<E extends ExpectedAsKey = 'ArrayBuffer'>(Url
     throw new Error('HTTPS is enforced, but the URL protocol is not HTTPS')
   }
 
-  if (MergedOptions.Payload && !['POST', 'PUT', 'PATCH', 'OPTIONS'].includes(MergedOptions.HttpMethod ?? 'GET')) {
-    throw new Error('Request payload is only supported for POST, PUT, PATCH, and OPTIONS methods')
+  if (MergedOptions.Payload && !['GET', 'POST', 'PUT', 'PATCH', 'OPTIONS'].includes(MergedOptions.HttpMethod ?? 'GET')) {
+    throw new Error('Request payload is only supported for GET, POST, PUT, PATCH, and OPTIONS methods')
   }
 
   const ExpectedAs = (Options?.ExpectedAs ?? (Url.pathname.endsWith('.json') ? 'JSON' : Url.pathname.endsWith('.txt') ? 'String' : 'ArrayBuffer')) as E
