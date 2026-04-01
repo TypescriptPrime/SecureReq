@@ -12,7 +12,7 @@
   ],
   "scripts": {
     "build": "tsc -p sources/tsconfig.json",
-    "lint": "eslint",
+    "lint": "tsc --noEmit && eslint",
     "test": "ava"
   },
   "exports": {
