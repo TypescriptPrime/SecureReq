@@ -87,8 +87,8 @@ export async function HTTPSRequest<E extends ExpectedAsKey = 'ArrayBuffer'>(Url:
           case 'JSON':
             try {
               Body = JSON.parse(new TextDecoder('utf-8').decode(BodyBuffer))
-            } catch (Error) {
-              return Reject(new Error('Failed to parse JSON response body'))
+            } catch (Err) {
+              return Reject(new Error('Failed to parse JSON response body', { cause: Err }))
             }
             break
           case 'String':
@@ -238,9 +238,9 @@ export async function HTTPS2Request<E extends ExpectedAsKey = 'ArrayBuffer'>(Url
         case 'JSON':
           try {
             Body = JSON.parse(new TextDecoder('utf-8').decode(BodyBuffer))
-          } catch (Error) {
+          } catch (Err) {
             HTTP2Session.close()
-            return Reject(new Error('Failed to parse JSON response body'))
+            return Reject(new Error('Failed to parse JSON response body', { cause: Err }))
           }
           break
         case 'String':
