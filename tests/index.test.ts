@@ -9,7 +9,7 @@ test('www.example.com HTML request', async T => {
 })
 
 test('JSON request without ExpectedAs', async T => {
-  let Url = new URL('https://api64.ipify.org?format=json')
+  let Url = new URL('https://postman-echo.com/get?foo1=bar1&foo2=bar2')
   let HTTPSRes = await HTTPSRequest(Url)
   T.is(HTTPSRes.StatusCode, 200)
   T.true(typeof HTTPSRes.Body === 'object' && HTTPSRes.Body instanceof ArrayBuffer)
@@ -23,7 +23,7 @@ test('HTTP/2 www.example.com HTML request', async T => {
 })
 
 test('HTTP/2 JSON request without ExpectedAs', async T => {
-  let Url = new URL('https://api64.ipify.org?format=json')
+  let Url = new URL('https://postman-echo.com/get?foo1=bar1&foo2=bar2')
   let HTTPSRes = await HTTPS2Request(Url)
   T.is(HTTPSRes.StatusCode, 200)
   T.true(typeof HTTPSRes.Body === 'object' && HTTPSRes.Body instanceof ArrayBuffer)
