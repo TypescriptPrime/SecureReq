@@ -7,6 +7,7 @@
 ## 🚀 Quick Summary
 
 - **Class-first** API that probes each origin with `http/1.1` first, then upgrades future requests to `http/2` when appropriate.
+- Also exposes `SimpleSecureReq`, a shared client instance for one-off requests without manual construction.
 - Automatic HTTP/2 probing is conservative: only safe body-less auto requests are retried from negotiation failure to `http/1.1`.
 - Supports **response compression** with `zstd`, `gzip`, and `deflate`.
 - Supports optional **redirect following** with configurable redirect limits.
@@ -69,6 +70,18 @@ for await (const chunk of streamed.Body) {
 }
 ```
 
+For quick one-off requests, you can use the exported shared client:
+
+```ts
+import { SimpleSecureReq } from '@typescriptprime/securereq'
+
+const response = await SimpleSecureReq.Request(new URL('https://api64.ipify.org?format=json'), {
+  ExpectedAs: 'JSON',
+})
+
+console.log(response.Body)
+```
+
 ---
 
 ## API Reference 📚
@@ -83,6 +96,12 @@ for await (const chunk of streamed.Body) {
 - `Close()` closes cached http/2 sessions.
 - `OriginCapabilityCacheLimit` bounds remembered origin capability entries with LRU-style eviction.
 - Invalid constructor options fail fast during initialization.
+
+### `SimpleSecureReq`
+
+- An exported shared `SecureReq` instance for simple or occasional requests.
+- Useful when you do not need to manage your own client lifecycle manually.
+- Supports the same `.Request()`, `.GetOriginCapabilities()`, and `.Close()` methods as a manually created `SecureReq` instance.
 
 ### `client.Request(Url, Options?)`
 
