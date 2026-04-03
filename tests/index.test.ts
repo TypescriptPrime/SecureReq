@@ -176,12 +176,12 @@ test('SecureReq enforces per-request timeouts while waiting for response headers
   const Error = await T.throwsAsync(async () => {
     await Client.Request(new URL('/slow-headers', TestServer.BaseUrl), {
       ExpectedAs: 'String',
-      TimeoutMs: 20,
+      TimeoutMs: 75,
     })
   })
 
   T.is(Error?.name, 'TimeoutError')
-  T.is(Error?.message, 'Request timed out after 20ms')
+  T.is(Error?.message, 'Request timed out after 75ms')
 })
 
 test('SecureReq keeps request timeouts active for streaming responses', async T => {
@@ -201,7 +201,7 @@ test('SecureReq keeps request timeouts active for streaming responses', async T 
 
   const Response = await Client.Request(new URL('/slow-stream', TestServer.BaseUrl), {
     ExpectedAs: 'Stream',
-    TimeoutMs: 20,
+    TimeoutMs: 150,
   })
 
   const Error = await T.throwsAsync(async () => {
@@ -209,7 +209,7 @@ test('SecureReq keeps request timeouts active for streaming responses', async T 
   })
 
   T.is(Error?.name, 'TimeoutError')
-  T.is(Error?.message, 'Request timed out after 20ms')
+  T.is(Error?.message, 'Request timed out after 150ms')
 })
 
 test('SecureReq supports AbortSignal cancellation', async T => {
@@ -235,7 +235,7 @@ test('SecureReq supports AbortSignal cancellation', async T => {
 
   setTimeout(() => {
     Controller.abort()
-  }, 20)
+  }, 75)
 
   const Error = await T.throwsAsync(async () => {
     await PendingRequest

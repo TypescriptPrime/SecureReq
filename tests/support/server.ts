@@ -137,13 +137,14 @@ export async function StartTestServer(): Promise<TestServer> {
             Response.statusCode = 200
             Response.setHeader('content-type', 'text/plain; charset=utf-8')
             Response.end(Buffer.from('slow-headers'))
-          }, 75)
+          }, 250)
           break
         }
 
         case '/slow-stream': {
           Response.statusCode = 200
           Response.setHeader('content-type', 'text/plain; charset=utf-8')
+          ;(Response as typeof Response & { flushHeaders?: () => void }).flushHeaders?.()
           Response.write(Buffer.from('slow-'))
 
           setTimeout(() => {
@@ -152,7 +153,7 @@ export async function StartTestServer(): Promise<TestServer> {
             }
 
             Response.end(Buffer.from('stream'))
-          }, 75)
+          }, 400)
           break
         }
 
