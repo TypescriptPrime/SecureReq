@@ -1,14 +1,15 @@
 # SecureReq 🔐
 
-**SecureReq** is a lightweight TypeScript utility for making secure HTTPS requests with strict TLS defaults and typed response parsing.
+**SecureReq** is a lightweight TypeScript utility for secure HTTP requests with strict TLS defaults, automatic HTTP/1.1 to HTTP/2 negotiation, streaming I/O, and typed response parsing.
 
 ---
 
 ## 🚀 Quick Summary
 
-- **Small, dependency-light** wrapper around Node's `https` for typed responses and safer TLS defaults.
+- **Class-first** API that probes each origin with `HTTP/1.1` first, then upgrades future requests to `HTTP/2` when appropriate.
+- Supports **response compression** with `zstd`, `gzip`, and `deflate`.
+- Supports **streaming uploads and streaming downloads**.
 - Defaults to **TLSv1.3**, Post Quantum Cryptography key exchange, a limited set of strongest ciphers, and a `User-Agent` header.
-- Supports typed response parsing: `JSON`, `String`, or raw `ArrayBuffer`.
 
 ---
 
@@ -24,31 +25,53 @@ npm install @typescriptprime/securereq
 
 ## Usage Examples 🔧
 
-Import and call the helper:
+Create a client and reuse it per origin:
 
 ```ts
-import { HTTPSRequest } from '@typescriptprime/securereq'
+import { Readable } from 'node:stream'
+import { SecureReq } from '@typescriptprime/securereq'
 
-// JSON (auto-detected by .json path) or explicit
-const url = new URL('https://api64.ipify.org?format=json')
-const res = await HTTPSRequest(url)
-console.log(res.StatusCode) // number
-console.log(res.Body) // ArrayBuffer or parsed JSON depending on `ExpectedAs` and URL
+const client = new SecureReq()
 
-// Force string
-const html = await HTTPSRequest(new URL('https://www.example.com/'), { ExpectedAs: 'String' })
-console.log(typeof html.Body) // 'string'
+// First request to an origin uses HTTP/1.1 probing.
+const first = await client.Request(new URL('https://api64.ipify.org?format=json'), {
+  ExpectedAs: 'JSON',
+})
 
-// Force ArrayBuffer
-const raw = await HTTPSRequest(new URL('https://example.com/'), { ExpectedAs: 'ArrayBuffer' })
-console.log(raw.Body instanceof ArrayBuffer)
+// Later requests to the same origin can move to HTTP/2 automatically.
+const second = await client.Request(new URL('https://api64.ipify.org?format=json'), {
+  ExpectedAs: 'JSON',
+})
+
+console.log(first.Protocol) // 'HTTP/1.1'
+console.log(second.Protocol) // 'HTTP/2' when available
+
+// Stream upload + stream download
+const streamed = await client.Request(new URL('https://example.com/upload'), {
+  HttpMethod: 'POST',
+  Payload: Readable.from(['chunk-1', 'chunk-2']),
+  ExpectedAs: 'Stream',
+})
+
+for await (const chunk of streamed.Body) {
+  console.log(chunk)
+}
 ```
 
 ---
 
 ## API Reference 📚
 
-### HTTPSRequest(Url, Options?)
+### `new SecureReq(Options?)`
+
+- Recommended entry point.
+- Keeps per-origin capability state:
+  - first request is sent with `HTTP/1.1`
+  - `Accept-Encoding: zstd, gzip, deflate`
+  - later requests narrow `Accept-Encoding` based on observed response headers and prefer `HTTP/2`
+- `Close()` closes cached HTTP/2 sessions.
+
+### `client.Request(Url, Options?)`
 
 - `Url: URL` — Target URL (must be an instance of `URL`).
 - `Options?: HTTPSRequestOptions` — Optional configuration object.
@@ -62,27 +85,35 @@ Throws:
 ### HTTPSRequestOptions
 
 Fields:
-- `TLS?: { IsHTTPSEnforced?: boolean, MinTLSVersion?: 'TLSv1.2'|'TLSv1.3', MaxTLSVersion?: 'TLSv1.2'|'TLSv1.3', Ciphers?: string[], KeyExchanges?: string[] }`
+- `TLS?: { IsHTTPSEnforced?: boolean, MinTLSVersion?: 'TLSv1.2'|'TLSv1.3', MaxTLSVersion?: 'TLSv1.2'|'TLSv1.3', Ciphers?: string[], KeyExchanges?: string[], RejectUnauthorized?: boolean }`
   - Defaults: `IsHTTPSEnforced: true`, both Min and Max set to `TLSv1.3`, a small secure cipher list and key exchange choices.
   - When `IsHTTPSEnforced` is `true`, a non-`https:` URL will throw.
 - `HttpHeaders?: Record<string,string>` — Custom headers. A `User-Agent` header is provided by default.
-- `ExpectedAs?: 'JSON'|'String'|'ArrayBuffer'` — How to parse the response body.
+- `HttpMethod?: 'GET'|'POST'|'PUT'|'DELETE'|'PATCH'|'HEAD'|'OPTIONS'`
+- `Payload?: string | ArrayBuffer | Uint8Array | Readable | AsyncIterable`
+- `ExpectedAs?: 'JSON'|'String'|'ArrayBuffer'|'Stream'` — How to parse the response body.
+- `PreferredProtocol?: 'auto'|'HTTP/1.1'|'HTTP/2'|'HTTP/3'`
+  - `HTTP/3` is currently a placeholder branch and falls back to `HTTP/2`.
+- `EnableCompression?: boolean` — Enables automatic `Accept-Encoding` negotiation and transparent response decompression.
 
 ### HTTPSResponse
 
-- `{ StatusCode: number, Headers: Record<string,string|string[]|undefined>, Body: T }`
+- `{ StatusCode: number, Headers: Record<string,string|string[]|undefined>, Body: T, Protocol: 'HTTP/1.1'|'HTTP/2', ContentEncoding: 'identity'|'zstd'|'gzip'|'deflate', DecodedBody: boolean }`
 
 Notes:
 - If `ExpectedAs` is omitted, a heuristic is used: `.json` → `JSON`, `.txt` → `String`, otherwise `ArrayBuffer`.
 - When `ExpectedAs` is `JSON`, the body is parsed and an error is thrown if parsing fails.
+- When `ExpectedAs` is `Stream`, the body is returned as a Node.js readable stream.
 
 ---
 
 ## Security & Behavior Notes 🔐
 
 - Strict TLS defaults lean on **TLSv1.3** and a reduced cipher list to encourage secure transport out of the box.
-- TLS options are forwarded to Node's HTTPS layer (`minVersion`, `maxVersion`, `ciphers`, `ecdhCurve`).
+- TLS options are forwarded to Node's HTTPS or HTTP/2 TLS layer (`minVersion`, `maxVersion`, `ciphers`, `ecdhCurve`).
 - The library uses `zod` for runtime validation of options.
+- Compression negotiation is origin-scoped. Subdomains are tracked independently.
+- HTTP/3 advertisement points are recorded from response headers, but Node.js built-in HTTP/3 transport is not yet used.
 
 ---
 
