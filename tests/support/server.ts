@@ -132,6 +132,54 @@ function CreateRequestHandler(RequestCounts: Map<string, number>, AdvertiseHTTP3
           break
         }
 
+        case '/redirect/plain': {
+          Response.statusCode = 302
+          Response.setHeader('location', '/plain')
+          Response.end(Buffer.from('redirecting'))
+          break
+        }
+
+        case '/redirect/chain/1': {
+          Response.statusCode = 302
+          Response.setHeader('location', '/redirect/chain/2')
+          Response.end(Buffer.from('redirect-chain-1'))
+          break
+        }
+
+        case '/redirect/chain/2': {
+          Response.statusCode = 302
+          Response.setHeader('location', '/plain')
+          Response.end(Buffer.from('redirect-chain-2'))
+          break
+        }
+
+        case '/redirect/post-302': {
+          Response.statusCode = 302
+          Response.setHeader('location', '/inspect-request')
+          Response.end(Buffer.from('redirect-post-302'))
+          break
+        }
+
+        case '/redirect/post-307': {
+          Response.statusCode = 307
+          Response.setHeader('location', '/inspect-request')
+          Response.end(Buffer.from('redirect-post-307'))
+          break
+        }
+
+        case '/inspect-request': {
+          const RequestBody = await ReadRequestBody(Request)
+
+          Response.statusCode = 200
+          Response.setHeader('content-type', 'application/json')
+          Response.end(Buffer.from(JSON.stringify({
+            Method: Request.method ?? 'GET',
+            Body: RequestBody,
+            Protocol,
+          })))
+          break
+        }
+
         case '/encoded/gzip':
         case '/encoded/deflate':
         case '/encoded/zstd': {

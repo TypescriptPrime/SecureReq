@@ -27,6 +27,8 @@ export interface HTTPSRequestOptions<E extends ExpectedAsKey = ExpectedAsKey> {
   ExpectedAs?: E,
   PreferredProtocol?: HTTPProtocolPreference,
   EnableCompression?: boolean,
+  FollowRedirects?: boolean,
+  MaxRedirects?: number,
   TimeoutMs?: number,
   Signal?: AbortSignal
 }

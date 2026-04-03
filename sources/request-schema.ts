@@ -31,6 +31,8 @@ export const RequestOptionsSchema = Zod.strictObject({
   ExpectedAs: Zod.enum(['JSON', 'String', 'ArrayBuffer', 'Stream']).optional(),
   PreferredProtocol: Zod.enum(['auto', 'http/1.1', 'http/2', 'http/3']).optional(),
   EnableCompression: Zod.boolean().optional(),
+  FollowRedirects: Zod.boolean().optional(),
+  MaxRedirects: Zod.number().finite().int().min(0).optional(),
   TimeoutMs: Zod.number().finite().positive().optional(),
   Signal: Zod.custom<AbortSignal>(Value => IsAbortSignal(Value), {
     message: 'Signal must be an AbortSignal',

@@ -89,6 +89,8 @@ export class SecureReq {
       HttpMethod: ParsedOptions.DefaultOptions?.HttpMethod ?? 'GET',
       PreferredProtocol: ParsedOptions.DefaultOptions?.PreferredProtocol ?? 'auto',
       EnableCompression: ParsedOptions.DefaultOptions?.EnableCompression ?? true,
+      FollowRedirects: ParsedOptions.DefaultOptions?.FollowRedirects ?? false,
+      MaxRedirects: ParsedOptions.DefaultOptions?.MaxRedirects ?? 5,
       TimeoutMs: ParsedOptions.DefaultOptions?.TimeoutMs,
     }
 
@@ -103,6 +105,14 @@ export class SecureReq {
   public async Request(Url: URL, Options: Omit<HTTPSRequestOptions, 'ExpectedAs'> & { ExpectedAs?: undefined }): Promise<HTTPSResponse<AutoDetectedResponseBody>>
   public async Request<E extends ExpectedAsKey>(Url: URL, Options: HTTPSRequestOptions<E> & { ExpectedAs: E }): Promise<HTTPSResponse<ExpectedAsMap[E]>>
   public async Request<E extends ExpectedAsKey>(Url: URL, Options?: HTTPSRequestOptions<E>): Promise<HTTPSResponse<AutoDetectedResponseBody | ExpectedAsMap[E]>> {
+    return await this.RequestInternal(Url, Options, 0)
+  }
+
+  private async RequestInternal<E extends ExpectedAsKey>(
+    Url: URL,
+    Options: HTTPSRequestOptions<E> | undefined,
+    RedirectCount: number,
+  ): Promise<HTTPSResponse<AutoDetectedResponseBody | ExpectedAsMap[E]>> {
     if (Url instanceof URL === false) {
       throw new TypeError('Url must be an instance of URL')
     }
@@ -125,14 +135,14 @@ export class SecureReq {
       }
 
       this.MarkOriginAsHTTP1Only(Url)
-      return await this.RequestWithHTTP1(Url, MergedOptions, ExpectedAs, PreconnectedTransport.Socket)
+      return await this.RequestWithHTTP1(Url, MergedOptions, ExpectedAs, RedirectCount, PreconnectedTransport.Socket)
     }
 
     if (Protocol !== 'http/2') {
-      return await this.RequestWithHTTP1(Url, MergedOptions, ExpectedAs)
+      return await this.RequestWithHTTP1(Url, MergedOptions, ExpectedAs, RedirectCount)
     }
 
-    return await this.RequestWithHTTP2(Url, MergedOptions, ExpectedAs, PreconnectedTransport?.Socket)
+    return await this.RequestWithHTTP2(Url, MergedOptions, ExpectedAs, RedirectCount, PreconnectedTransport?.Socket)
   }
 
   public GetOriginCapabilities(Url: URL): OriginCapabilities | undefined {
@@ -175,6 +185,8 @@ export class SecureReq {
       HttpMethod: Options?.HttpMethod ?? this.DefaultOptions.HttpMethod,
       PreferredProtocol: Options?.PreferredProtocol ?? this.DefaultOptions.PreferredProtocol,
       EnableCompression: Options?.EnableCompression ?? this.DefaultOptions.EnableCompression,
+      FollowRedirects: Options?.FollowRedirects ?? this.DefaultOptions.FollowRedirects,
+      MaxRedirects: Options?.MaxRedirects ?? this.DefaultOptions.MaxRedirects,
       TimeoutMs: Options?.TimeoutMs ?? this.DefaultOptions.TimeoutMs,
       Payload: Options?.Payload,
       ExpectedAs: Options?.ExpectedAs,
@@ -274,8 +286,9 @@ export class SecureReq {
     Url: URL,
     Options: HTTPSRequestOptions<E>,
     ExpectedAs: E,
+    RedirectCount: number,
     PreconnectedSocket?: TLS.TLSSocket,
-  ): Promise<HTTPSResponse<ExpectedAsMap[E]>> {
+  ): Promise<HTTPSResponse<AutoDetectedResponseBody | ExpectedAsMap[E]>> {
     const { Headers, RequestedCompressions } = this.BuildRequestHeaders(Url, Options)
 
     return await new Promise<HTTPSResponse<ExpectedAsMap[E]>>((Resolve, Reject) => {
@@ -303,13 +316,27 @@ export class SecureReq {
       }
 
       const Request = this.CreateHTTP1Request(Url, Options, Headers, Response => {
+        const ResponseHeaders = NormalizeIncomingHeaders(Response.headers as Record<string, unknown>)
+        const StatusCode = Response.statusCode ?? 0
+
+        if (this.ShouldFollowRedirect(StatusCode, ResponseHeaders, Options)) {
+          CleanupCancellation()
+          this.UpdateOriginCapabilities(Url, 'http/1.1', ResponseHeaders, RequestedCompressions)
+          this.DiscardResponseStream(Response)
+          void this.FollowRedirect(Url, Options, StatusCode, ResponseHeaders, RedirectCount)
+            .then(ResponseValue => {
+              ResolveOnce(ResponseValue as HTTPSResponse<ExpectedAsMap[E]>)
+            }, RejectOnce)
+          return
+        }
+
         void this.FinalizeResponse({
           Url,
           Options,
           ExpectedAs,
           Protocol: 'http/1.1',
-          StatusCode: Response.statusCode ?? 0,
-          Headers: NormalizeIncomingHeaders(Response.headers as Record<string, unknown>),
+          StatusCode,
+          Headers: ResponseHeaders,
           ResponseStream: Response,
           RequestedCompressions,
         }).then(ResponseValue => {
@@ -400,8 +427,9 @@ export class SecureReq {
     Url: URL,
     Options: HTTPSRequestOptions<E>,
     ExpectedAs: E,
+    RedirectCount: number,
     PreconnectedSocket?: TLS.TLSSocket,
-  ): Promise<HTTPSResponse<ExpectedAsMap[E]>> {
+  ): Promise<HTTPSResponse<AutoDetectedResponseBody | ExpectedAsMap[E]>> {
     const { Headers, RequestedCompressions } = this.BuildRequestHeaders(Url, Options)
     const Session = await this.GetOrCreateHTTP2Session(Url, Options, PreconnectedSocket)
     let Request: HTTP2.ClientHttp2Stream
@@ -444,13 +472,27 @@ export class SecureReq {
       }
 
       Request.once('response', ResponseHeaders => {
+        const NormalizedHeaders = NormalizeIncomingHeaders(ResponseHeaders as Record<string, unknown>)
+        const StatusCode = Number(ResponseHeaders[':status'] ?? 0)
+
+        if (this.ShouldFollowRedirect(StatusCode, NormalizedHeaders, Options)) {
+          CleanupCancellation()
+          this.UpdateOriginCapabilities(Url, 'http/2', NormalizedHeaders, RequestedCompressions)
+          this.DiscardResponseStream(Request)
+          void this.FollowRedirect(Url, Options, StatusCode, NormalizedHeaders, RedirectCount)
+            .then(ResponseValue => {
+              ResolveOnce(ResponseValue as HTTPSResponse<ExpectedAsMap[E]>)
+            }, RejectOnce)
+          return
+        }
+
         void this.FinalizeResponse({
           Url,
           Options,
           ExpectedAs,
           Protocol: 'http/2',
-          StatusCode: Number(ResponseHeaders[':status'] ?? 0),
-          Headers: NormalizeIncomingHeaders(ResponseHeaders as Record<string, unknown>),
+          StatusCode,
+          Headers: NormalizedHeaders,
           ResponseStream: Request,
           RequestedCompressions,
         }).then(ResponseValue => {
@@ -884,6 +926,97 @@ export class SecureReq {
     return IsAutomaticHTTP2ProbeMethod(Options.HttpMethod)
       && Options.Payload === undefined
       && Options.PreferredProtocol === 'auto'
+  }
+
+  private ShouldFollowRedirect(
+    StatusCode: number,
+    Headers: Record<string, string | string[] | undefined>,
+    Options: HTTPSRequestOptions,
+  ): boolean {
+    return Options.FollowRedirects === true
+      && StatusCode >= 300
+      && StatusCode <= 308
+      && GetHeaderValue(Headers, 'location') !== undefined
+  }
+
+  private async FollowRedirect<E extends ExpectedAsKey>(
+    Url: URL,
+    Options: HTTPSRequestOptions<E>,
+    StatusCode: number,
+    Headers: Record<string, string | string[] | undefined>,
+    RedirectCount: number,
+  ): Promise<HTTPSResponse<AutoDetectedResponseBody | ExpectedAsMap[E]>> {
+    const LocationHeader = GetHeaderValue(Headers, 'location')
+
+    if (LocationHeader === undefined) {
+      throw new Error('Redirect response did not include a location header')
+    }
+
+    const MaxRedirects = Options.MaxRedirects ?? 5
+    if (RedirectCount >= MaxRedirects) {
+      throw new Error(`Maximum redirect limit exceeded (${MaxRedirects})`)
+    }
+
+    const RedirectUrl = new URL(LocationHeader, Url)
+    const RedirectOptions = this.BuildRedirectOptions(Url, RedirectUrl, Options, StatusCode)
+
+    return await this.RequestInternal(RedirectUrl, RedirectOptions, RedirectCount + 1)
+  }
+
+  private BuildRedirectOptions<E extends ExpectedAsKey>(
+    Url: URL,
+    RedirectUrl: URL,
+    Options: HTTPSRequestOptions<E>,
+    StatusCode: number,
+  ): HTTPSRequestOptions<E> {
+    const OriginalMethod = Options.HttpMethod ?? 'GET'
+    const RedirectMethod = this.ResolveRedirectMethod(StatusCode, OriginalMethod)
+    const DropPayload = RedirectMethod !== OriginalMethod || RedirectMethod === 'GET'
+
+    if (DropPayload === false && Options.Payload !== undefined && IsStreamingPayload(Options.Payload)) {
+      throw new Error('Cannot automatically follow redirects that require replaying a streaming payload')
+    }
+
+    const RedirectHeaders = {
+      ...(Options.HttpHeaders ?? {}),
+    }
+
+    delete RedirectHeaders.host
+    delete RedirectHeaders['content-length']
+    delete RedirectHeaders['transfer-encoding']
+
+    if (DropPayload) {
+      delete RedirectHeaders['content-type']
+    }
+
+    if (GetOriginKey(Url) !== GetOriginKey(RedirectUrl)) {
+      delete RedirectHeaders.authorization
+      delete RedirectHeaders.cookie
+      delete RedirectHeaders['proxy-authorization']
+    }
+
+    return {
+      ...Options,
+      HttpMethod: RedirectMethod,
+      Payload: DropPayload ? undefined : Options.Payload,
+      HttpHeaders: RedirectHeaders,
+    }
+  }
+
+  private ResolveRedirectMethod(StatusCode: number, Method: HTTPSRequestOptions['HttpMethod']): HTTPSRequestOptions['HttpMethod'] {
+    if (StatusCode === 303 && Method !== 'HEAD') {
+      return 'GET'
+    }
+
+    if ((StatusCode === 301 || StatusCode === 302) && Method === 'POST') {
+      return 'GET'
+    }
+
+    return Method
+  }
+
+  private DiscardResponseStream(Stream: Readable): void {
+    Stream.resume()
   }
 
   private AttachRequestCancellation(

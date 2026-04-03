@@ -9,6 +9,7 @@
 - **Class-first** API that probes each origin with `http/1.1` first, then upgrades future requests to `http/2` when appropriate.
 - Automatic HTTP/2 probing is conservative: only safe body-less auto requests are retried from negotiation failure to `http/1.1`.
 - Supports **response compression** with `zstd`, `gzip`, and `deflate`.
+- Supports optional **redirect following** with configurable redirect limits.
 - Supports **streaming uploads and streaming downloads**.
 - Defaults to **TLSv1.3**, Post Quantum Cryptography key exchange, a limited set of strongest ciphers, and a `User-Agent` header.
 
@@ -46,6 +47,15 @@ const second = await client.Request(new URL('https://api64.ipify.org?format=json
 
 console.log(first.Protocol) // 'http/1.1'
 console.log(second.Protocol) // 'http/2' when available after the safe probe
+
+// Follow redirects automatically
+const redirected = await client.Request(new URL('https://example.com/old-path'), {
+  ExpectedAs: 'String',
+  FollowRedirects: true,
+  MaxRedirects: 5,
+})
+
+console.log(redirected.Body)
 
 // Stream upload + stream download
 const streamed = await client.Request(new URL('https://example.com/upload'), {
@@ -101,6 +111,8 @@ Fields:
 - `PreferredProtocol?: 'auto'|'http/1.1'|'http/2'|'http/3'`
   - `http/3` is currently a placeholder preference and uses the same TCP/TLS negotiation path as `http/2` until native HTTP/3 transport is added.
 - `EnableCompression?: boolean` — Enables automatic `Accept-Encoding` negotiation and transparent response decompression.
+- `FollowRedirects?: boolean` — Follows redirect responses with a `Location` header.
+- `MaxRedirects?: number` — Maximum redirect hops when `FollowRedirects` is enabled. Default: `5`.
 - `TimeoutMs?: number` — Aborts the request if headers or body transfer exceed the given number of milliseconds.
 - `Signal?: AbortSignal` — Cancels the request using a standard abort signal.
 
@@ -113,7 +125,9 @@ Notes:
 - Because omitted `ExpectedAs` may produce different runtime body shapes, the TypeScript return type is `unknown`. Prefer explicit `ExpectedAs` in application code.
 - When `ExpectedAs` is `JSON`, the body is parsed and an error is thrown if parsing fails.
 - When `ExpectedAs` is `Stream`, the body is returned as a Node.js readable stream.
-- Redirects are not followed automatically; `3xx` responses are returned as-is.
+- Redirects are returned as-is by default. Set `FollowRedirects: true` to follow them.
+- `301`/`302` convert `POST` into `GET`, `303` converts non-`HEAD` methods into `GET`, and `307`/`308` preserve method and payload.
+- Redirects that require replaying a streaming payload are rejected instead of silently re-sending the stream.
 
 ---
 
