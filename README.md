@@ -122,6 +122,7 @@ Fields:
 - `TLS?: { IsHTTPSEnforced?: boolean, MinTLSVersion?: 'TLSv1.2'|'TLSv1.3', MaxTLSVersion?: 'TLSv1.2'|'TLSv1.3', Ciphers?: string[], KeyExchanges?: string[], RejectUnauthorized?: boolean }`
   - Defaults: `IsHTTPSEnforced: true`, both Min and Max set to `TLSv1.3`, a small secure cipher list and key exchange choices.
   - When `IsHTTPSEnforced` is `true`, a non-`https:` URL will throw.
+  - `KeyExchanges` is forwarded to Node.js as the TLS supported groups / curve list. For strict `TLSv1.2` + ECDSA servers, overly narrow values such as only `X25519` may fail; include a compatible certificate curve such as `P-256` when needed.
 - `HttpHeaders?: Record<string,string>` — Custom headers. A `User-Agent` header is provided by default.
 - `HttpMethod?: 'GET'|'POST'|'PUT'|'DELETE'|'PATCH'|'HEAD'|'OPTIONS'`
 - `Payload?: string | ArrayBuffer | Uint8Array | Readable | AsyncIterable`

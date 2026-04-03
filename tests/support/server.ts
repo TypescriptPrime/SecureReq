@@ -9,6 +9,19 @@ type TestRequest = HTTP.IncomingMessage | HTTP2.Http2ServerRequest
 type TestResponse = HTTP.ServerResponse<HTTP.IncomingMessage> | HTTP2.Http2ServerResponse<HTTP2.Http2ServerRequest>
 type TestNodeServer = HTTPS.Server | HTTP2.Http2SecureServer
 
+interface TestServerTLSOptions {
+  MinVersion?: 'TLSv1.2' | 'TLSv1.3',
+  MaxVersion?: 'TLSv1.2' | 'TLSv1.3',
+  Ciphers?: string,
+  CertificateAlgorithm?: 'ed25519' | 'prime256v1'
+}
+
+interface CreateTestServerOptions {
+  AdvertiseHTTP3: boolean,
+  HTTP2Enabled: boolean,
+  TLS?: TestServerTLSOptions
+}
+
 export interface TestServer {
   BaseUrl: string,
   GetRequestCount: (Path: string) => number,
@@ -325,20 +338,28 @@ async function StartServer(
   }
 }
 
-async function CreateTLSServer(AdvertiseHTTP3: boolean, HTTP2Enabled: boolean): Promise<TestServer> {
-  const TLSCertificate = await CreateTestTLSCertificate()
+async function CreateTLSServer(Options: CreateTestServerOptions): Promise<TestServer> {
+  const TLSCertificate = await CreateTestTLSCertificate({
+    Algorithm: Options.TLS?.CertificateAlgorithm,
+  })
   const RequestCounts = new Map<string, number>()
-  const Handler = CreateRequestHandler(RequestCounts, AdvertiseHTTP3)
+  const Handler = CreateRequestHandler(RequestCounts, Options.AdvertiseHTTP3)
 
-  const Server = HTTP2Enabled
+  const ServerOptions = {
+    key: TLSCertificate.Key,
+    cert: TLSCertificate.Cert,
+    minVersion: Options.TLS?.MinVersion,
+    maxVersion: Options.TLS?.MaxVersion,
+    ciphers: Options.TLS?.Ciphers,
+  }
+
+  const Server = Options.HTTP2Enabled
     ? HTTP2.createSecureServer({
       allowHTTP1: true,
-      key: TLSCertificate.Key,
-      cert: TLSCertificate.Cert,
+      ...ServerOptions,
     })
     : HTTPS.createServer({
-      key: TLSCertificate.Key,
-      cert: TLSCertificate.Cert,
+      ...ServerOptions,
     })
 
   Server.on('request', Handler)
@@ -347,9 +368,28 @@ async function CreateTLSServer(AdvertiseHTTP3: boolean, HTTP2Enabled: boolean): 
 }
 
 export async function StartTestServer(): Promise<TestServer> {
-  return await CreateTLSServer(true, true)
+  return await CreateTLSServer({
+    AdvertiseHTTP3: true,
+    HTTP2Enabled: true,
+  })
 }
 
 export async function StartHTTP1OnlyTestServer(): Promise<TestServer> {
-  return await CreateTLSServer(false, false)
+  return await CreateTLSServer({
+    AdvertiseHTTP3: false,
+    HTTP2Enabled: false,
+  })
+}
+
+export async function StartTLS12ECDSATestServer(): Promise<TestServer> {
+  return await CreateTLSServer({
+    AdvertiseHTTP3: false,
+    HTTP2Enabled: false,
+    TLS: {
+      MinVersion: 'TLSv1.2',
+      MaxVersion: 'TLSv1.2',
+      Ciphers: 'ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305',
+      CertificateAlgorithm: 'prime256v1',
+    },
+  })
 }

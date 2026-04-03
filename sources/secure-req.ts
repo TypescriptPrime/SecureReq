@@ -311,7 +311,7 @@ export class SecureReq {
         if (Settled === false) {
           Settled = true
           CleanupCancellation()
-          Reject(ToError(Error))
+          Reject(this.EnhanceTransportError(Error, Options))
         }
       }
 
@@ -467,7 +467,7 @@ export class SecureReq {
           Settled = true
           CleanupCancellation()
           this.InvalidateHTTP2Session(Url, Options, Session)
-          Reject(ToError(Error))
+          Reject(this.EnhanceTransportError(Error, Options))
         }
       }
 
@@ -596,10 +596,10 @@ export class SecureReq {
           this.InvalidateHTTP2Session(Url, Options, Session)
           Reject(
             Connected
-              ? ToError(Cause)
+              ? this.EnhanceTransportError(Cause, Options)
               : (Cause instanceof HTTP2NegotiationError
                 ? Cause
-                : new HTTP2NegotiationError('Failed to establish HTTP/2 session', { cause: Cause })),
+                : new HTTP2NegotiationError('Failed to establish HTTP/2 session', { cause: this.EnhanceTransportError(Cause, Options) })),
           )
         }
 
@@ -853,6 +853,29 @@ export class SecureReq {
     })
   }
 
+  private EnhanceTransportError(Cause: unknown, Options: HTTPSRequestOptions): Error {
+    const TransportError = ToError(Cause)
+    const NormalizedMessage = TransportError.message.toLowerCase()
+    const UsesExplicitTLS12 = Options.TLS?.MinTLSVersion === 'TLSv1.2' && Options.TLS?.MaxTLSVersion === 'TLSv1.2'
+    const UsesECDSACipher = Options.TLS?.Ciphers?.some(Cipher => Cipher.toUpperCase().includes('ECDHE-ECDSA-')) ?? false
+
+    if (
+      UsesExplicitTLS12
+      && Options.TLS?.KeyExchanges?.length
+      && (
+        NormalizedMessage.includes('wrong curve')
+        || (UsesECDSACipher && NormalizedMessage.includes('handshake failure'))
+      )
+    ) {
+      return new Error(
+        `TLS handshake failed while using TLSv1.2 with KeyExchanges (${Options.TLS.KeyExchanges.join(', ')}). This commonly means the server certificate needs a compatible curve such as P-256 in addition to X25519. Add P-256, remove the KeyExchanges restriction, or allow TLSv1.3.`,
+        { cause: TransportError },
+      )
+    }
+
+    return TransportError
+  }
+
   private async NegotiateSecureTransport(Url: URL, Options: HTTPSRequestOptions): Promise<NegotiatedSecureTransport> {
     return await new Promise<NegotiatedSecureTransport>((Resolve, Reject) => {
       const Socket = TLS.connect({
@@ -892,7 +915,7 @@ export class SecureReq {
       }
 
       const HandleError = (Cause: unknown) => {
-        RejectWithNegotiationError('Failed to negotiate HTTP/2 session', Cause)
+        RejectWithNegotiationError('Failed to negotiate HTTP/2 session', this.EnhanceTransportError(Cause, Options))
       }
 
       const HandleClose = () => {
