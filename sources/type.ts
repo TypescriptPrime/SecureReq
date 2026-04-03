@@ -4,6 +4,7 @@ export type HTTPCompressionAlgorithm = 'zstd' | 'gzip' | 'deflate'
 export type HTTPProtocol = 'http/1.1' | 'http/2' | 'http/3'
 export type HTTPMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'HEAD' | 'OPTIONS'
 export type HTTPProtocolPreference = 'auto' | HTTPProtocol
+export type AutoDetectedResponseBody = unknown
 
 export interface TLSOptions {
   IsHTTPSEnforced?: boolean,

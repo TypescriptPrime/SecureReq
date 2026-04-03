@@ -18,4 +18,5 @@ export const DefaultHTTPHeaders = {
 export const DefaultSupportedCompressions: HTTPCompressionAlgorithm[] = ['zstd', 'gzip', 'deflate']
 export const ConnectionSpecificHeaders = new Set(['connection', 'host', 'http2-settings', 'keep-alive', 'proxy-connection', 'te', 'transfer-encoding', 'upgrade'])
 export const PayloadEnabledMethods = new Set<HTTPMethod>(['GET', 'POST', 'PUT', 'PATCH', 'OPTIONS'])
+export const AutomaticHTTP2ProbeMethods = new Set<HTTPMethod>(['GET', 'HEAD'])
 export const AvailableTLSCiphers = new Set(TLS.getCiphers().map(Cipher => Cipher.toLowerCase()))

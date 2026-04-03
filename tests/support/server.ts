@@ -1,10 +1,17 @@
+import * as HTTP from 'node:http'
 import * as HTTP2 from 'node:http2'
+import * as HTTPS from 'node:https'
 import * as ZLib from 'node:zlib'
 import { CreateTestTLSCertificate } from './tls.js'
 import type { HTTPCompressionAlgorithm } from '@/index.js'
 
+type TestRequest = HTTP.IncomingMessage | HTTP2.Http2ServerRequest
+type TestResponse = HTTP.ServerResponse<HTTP.IncomingMessage> | HTTP2.Http2ServerResponse<HTTP2.Http2ServerRequest>
+type TestNodeServer = HTTPS.Server | HTTP2.Http2SecureServer
+
 export interface TestServer {
   BaseUrl: string,
+  GetRequestCount: (Path: string) => number,
   Close: () => Promise<void>
 }
 
@@ -41,6 +48,24 @@ function CompressBody(Body: string | Uint8Array, Encoding?: HTTPCompressionAlgor
   }
 }
 
+function IncrementRequestCount(RequestCounts: Map<string, number>, Path: string): void {
+  RequestCounts.set(Path, (RequestCounts.get(Path) ?? 0) + 1)
+}
+
+function GetAcceptEncoding(Request: TestRequest): string {
+  return Array.isArray(Request.headers['accept-encoding'])
+    ? Request.headers['accept-encoding'].join(', ')
+    : Request.headers['accept-encoding'] ?? ''
+}
+
+function WriteResponse(Response: TestResponse, Chunk: Uint8Array): void {
+  ;(Response as HTTP.ServerResponse<HTTP.IncomingMessage>).write(Chunk)
+}
+
+function EndResponse(Response: TestResponse, Chunk: Uint8Array): void {
+  ;(Response as HTTP.ServerResponse<HTTP.IncomingMessage>).end(Chunk)
+}
+
 export async function ReadStreamAsString(Stream: AsyncIterable<string | Uint8Array>): Promise<string> {
   let Result = ''
 
@@ -55,23 +80,14 @@ async function ReadRequestBody(Request: AsyncIterable<string | Uint8Array>): Pro
   return await ReadStreamAsString(Request)
 }
 
-export async function StartTestServer(): Promise<TestServer> {
-  const TLSCertificate = await CreateTestTLSCertificate()
-  const Server = HTTP2.createSecureServer({
-    allowHTTP1: true,
-    key: TLSCertificate.Key,
-    cert: TLSCertificate.Cert,
-  })
-
-  let IsClosed = false
-
-  Server.on('request', (Request, Response) => {
+function CreateRequestHandler(RequestCounts: Map<string, number>, AdvertiseHTTP3: boolean): (Request: TestRequest, Response: TestResponse) => void {
+  return (Request, Response) => {
     void (async () => {
       const RequestUrl = new URL(Request.url ?? '/', 'https://localhost')
-      const AcceptEncoding = Array.isArray(Request.headers['accept-encoding'])
-        ? Request.headers['accept-encoding'].join(', ')
-        : Request.headers['accept-encoding'] ?? ''
+      const AcceptEncoding = GetAcceptEncoding(Request)
       const Protocol = Request.httpVersion === '2.0' ? 'http/2' : 'http/1.1'
+
+      IncrementRequestCount(RequestCounts, RequestUrl.pathname)
 
       switch (RequestUrl.pathname) {
         case '/negotiate': {
@@ -84,11 +100,34 @@ export async function StartTestServer(): Promise<TestServer> {
           Response.statusCode = 200
           Response.setHeader('content-type', 'application/json')
           Response.setHeader('x-observed-accept-encoding', AcceptEncoding)
-          Response.setHeader('alt-svc', 'h3=":443"; ma=60')
+          if (AdvertiseHTTP3) {
+            Response.setHeader('alt-svc', 'h3=":443"; ma=60')
+          }
           if (ChosenEncoding) {
             Response.setHeader('content-encoding', ChosenEncoding)
           }
           Response.end(Payload)
+          break
+        }
+
+        case '/invalid-json': {
+          Response.statusCode = 200
+          Response.setHeader('content-type', 'application/json')
+          Response.end(Buffer.from('{invalid-json'))
+          break
+        }
+
+        case '/auto.json': {
+          Response.statusCode = 200
+          Response.setHeader('content-type', 'application/json')
+          Response.end(Buffer.from(JSON.stringify({ ok: true })))
+          break
+        }
+
+        case '/auto.txt': {
+          Response.statusCode = 200
+          Response.setHeader('content-type', 'text/plain; charset=utf-8')
+          Response.end(Buffer.from('auto-text'))
           break
         }
 
@@ -114,9 +153,9 @@ export async function StartTestServer(): Promise<TestServer> {
           Response.setHeader('content-type', 'text/plain; charset=utf-8')
           Response.setHeader('content-encoding', 'gzip')
 
-          Response.write(ResponseBody.subarray(0, Half))
+          WriteResponse(Response, ResponseBody.subarray(0, Half))
           setTimeout(() => {
-            Response.end(ResponseBody.subarray(Half))
+            EndResponse(Response, ResponseBody.subarray(Half))
           }, 10)
           break
         }
@@ -144,15 +183,15 @@ export async function StartTestServer(): Promise<TestServer> {
         case '/slow-stream': {
           Response.statusCode = 200
           Response.setHeader('content-type', 'text/plain; charset=utf-8')
-          ;(Response as typeof Response & { flushHeaders?: () => void }).flushHeaders?.()
-          Response.write(Buffer.from('slow-'))
+          ;(Response as TestResponse & { flushHeaders?: () => void }).flushHeaders?.()
+          WriteResponse(Response, Buffer.from('slow-'))
 
           setTimeout(() => {
             if (Response.writableEnded) {
               return
             }
 
-            Response.end(Buffer.from('stream'))
+            EndResponse(Response, Buffer.from('stream'))
           }, 400)
           break
         }
@@ -168,7 +207,15 @@ export async function StartTestServer(): Promise<TestServer> {
       Response.setHeader('content-type', 'text/plain; charset=utf-8')
       Response.end(Buffer.from(String(Cause)))
     })
-  })
+  }
+}
+
+async function StartServer(
+  Server: TestNodeServer,
+  RequestCounts: Map<string, number>,
+  TLSCleanup: () => Promise<void>,
+): Promise<TestServer> {
+  let IsClosed = false
 
   try {
     await new Promise<void>((Resolve, Reject) => {
@@ -187,18 +234,19 @@ export async function StartTestServer(): Promise<TestServer> {
       Server.listen(0, '127.0.0.1')
     })
   } catch (Cause) {
-    await TLSCertificate.Cleanup()
+    await TLSCleanup()
     throw Cause
   }
 
   const Address = Server.address()
   if (Address === null || typeof Address === 'string') {
-    await TLSCertificate.Cleanup()
+    await TLSCleanup()
     throw new Error('Failed to resolve test server address')
   }
 
   return {
     BaseUrl: `https://localhost:${Address.port}`,
+    GetRequestCount: Path => RequestCounts.get(Path) ?? 0,
     Close: async () => {
       if (IsClosed) {
         return
@@ -217,7 +265,36 @@ export async function StartTestServer(): Promise<TestServer> {
         })
       })
 
-      await TLSCertificate.Cleanup()
+      await TLSCleanup()
     },
   }
+}
+
+async function CreateTLSServer(AdvertiseHTTP3: boolean, HTTP2Enabled: boolean): Promise<TestServer> {
+  const TLSCertificate = await CreateTestTLSCertificate()
+  const RequestCounts = new Map<string, number>()
+  const Handler = CreateRequestHandler(RequestCounts, AdvertiseHTTP3)
+
+  const Server = HTTP2Enabled
+    ? HTTP2.createSecureServer({
+      allowHTTP1: true,
+      key: TLSCertificate.Key,
+      cert: TLSCertificate.Cert,
+    })
+    : HTTPS.createServer({
+      key: TLSCertificate.Key,
+      cert: TLSCertificate.Cert,
+    })
+
+  Server.on('request', Handler)
+
+  return await StartServer(Server, RequestCounts, TLSCertificate.Cleanup)
+}
+
+export async function StartTestServer(): Promise<TestServer> {
+  return await CreateTLSServer(true, true)
+}
+
+export async function StartHTTP1OnlyTestServer(): Promise<TestServer> {
+  return await CreateTLSServer(false, false)
 }

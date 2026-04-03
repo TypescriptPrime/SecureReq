@@ -24,6 +24,7 @@ export const GlobalSecureReq = new Proxy({} as SecureReq, {
 }) as SecureReq
 
 export type {
+  AutoDetectedResponseBody,
   ExpectedAsKey,
   ExpectedAsMap,
   HTTPCompressionAlgorithm,

@@ -11,8 +11,14 @@ import {
   DefaultTLSOptions,
   PayloadEnabledMethods,
 } from './constants.js'
-import { DetermineExpectedAs, ToError } from './request-helpers.js'
-import { RequestOptionsSchema } from './request-schema.js'
+import {
+  DetermineExpectedAs,
+  HTTP2NegotiationError,
+  IsAutomaticHTTP2ProbeMethod,
+  IsHTTP2NegotiationError,
+  ToError,
+} from './request-helpers.js'
+import { RequestOptionsSchema, SecureReqOptionsSchema } from './request-schema.js'
 import {
   CreateDecodedBodyStream,
   GetHeaderValue,
@@ -30,6 +36,7 @@ import {
   ToReadableStream,
 } from './utils.js'
 import type {
+  AutoDetectedResponseBody,
   ExpectedAsKey,
   ExpectedAsMap,
   HTTPCompressionAlgorithm,
@@ -50,42 +57,48 @@ interface FinalizeResponseContext<E extends ExpectedAsKey> {
   RequestedCompressions: HTTPCompressionAlgorithm[]
 }
 
+interface CachedOriginCapabilities extends OriginCapabilities {
+  HTTP2Support: 'unknown' | 'supported' | 'unsupported'
+}
+
 export class SecureReq {
   private readonly DefaultOptions: Omit<HTTPSRequestOptions, 'Payload' | 'ExpectedAs' | 'Signal'>
   private readonly SupportedCompressions: HTTPCompressionAlgorithm[]
   private readonly HTTP2SessionIdleTimeout: number
   private readonly OriginCapabilityCacheLimit: number
-  private readonly OriginCapabilityCache = new Map<string, OriginCapabilities>()
+  private readonly OriginCapabilityCache = new Map<string, CachedOriginCapabilities>()
   private readonly HTTP2SessionCache = new Map<string, HTTP2.ClientHttp2Session>()
   private readonly PendingHTTP2SessionCache = new Map<string, Promise<HTTP2.ClientHttp2Session>>()
 
   public constructor(Options: SecureReqOptions = {}) {
+    const ParsedOptions = SecureReqOptionsSchema.parse(Options)
+
     this.DefaultOptions = {
       TLS: {
         ...DefaultTLSOptions,
-        ...(Options.DefaultOptions?.TLS ?? {}),
+        ...(ParsedOptions.DefaultOptions?.TLS ?? {}),
       },
       HttpHeaders: {
         ...DefaultHTTPHeaders,
-        ...NormalizeHeaders(Options.DefaultOptions?.HttpHeaders),
+        ...NormalizeHeaders(ParsedOptions.DefaultOptions?.HttpHeaders),
       },
-      HttpMethod: Options.DefaultOptions?.HttpMethod ?? 'GET',
-      PreferredProtocol: Options.DefaultOptions?.PreferredProtocol ?? 'auto',
-      EnableCompression: Options.DefaultOptions?.EnableCompression ?? true,
-      TimeoutMs: Options.DefaultOptions?.TimeoutMs,
+      HttpMethod: ParsedOptions.DefaultOptions?.HttpMethod ?? 'GET',
+      PreferredProtocol: ParsedOptions.DefaultOptions?.PreferredProtocol ?? 'auto',
+      EnableCompression: ParsedOptions.DefaultOptions?.EnableCompression ?? true,
+      TimeoutMs: ParsedOptions.DefaultOptions?.TimeoutMs,
     }
 
-    this.SupportedCompressions = (Options.SupportedCompressions?.length ? Options.SupportedCompressions : DefaultSupportedCompressions)
+    this.SupportedCompressions = (ParsedOptions.SupportedCompressions?.length ? ParsedOptions.SupportedCompressions : DefaultSupportedCompressions)
       .filter((Value, Index, Values) => Values.indexOf(Value) === Index)
 
-    this.HTTP2SessionIdleTimeout = Options.HTTP2SessionIdleTimeout ?? 30_000
-    this.OriginCapabilityCacheLimit = Number.isFinite(Options.OriginCapabilityCacheLimit)
-      && (Options.OriginCapabilityCacheLimit ?? 0) > 0
-      ? Math.floor(Options.OriginCapabilityCacheLimit ?? 0)
-      : 256
+    this.HTTP2SessionIdleTimeout = ParsedOptions.HTTP2SessionIdleTimeout ?? 30_000
+    this.OriginCapabilityCacheLimit = ParsedOptions.OriginCapabilityCacheLimit ?? 256
   }
 
-  public async Request<E extends ExpectedAsKey = 'ArrayBuffer'>(Url: URL, Options?: HTTPSRequestOptions<E>): Promise<HTTPSResponse<ExpectedAsMap[E]>> {
+  public async Request(Url: URL): Promise<HTTPSResponse<AutoDetectedResponseBody>>
+  public async Request(Url: URL, Options: Omit<HTTPSRequestOptions, 'ExpectedAs'> & { ExpectedAs?: undefined }): Promise<HTTPSResponse<AutoDetectedResponseBody>>
+  public async Request<E extends ExpectedAsKey>(Url: URL, Options: HTTPSRequestOptions<E> & { ExpectedAs: E }): Promise<HTTPSResponse<ExpectedAsMap[E]>>
+  public async Request<E extends ExpectedAsKey>(Url: URL, Options?: HTTPSRequestOptions<E>): Promise<HTTPSResponse<AutoDetectedResponseBody | ExpectedAsMap[E]>> {
     if (Url instanceof URL === false) {
       throw new TypeError('Url must be an instance of URL')
     }
@@ -98,19 +111,14 @@ export class SecureReq {
 
     const Protocol = this.ResolveTransportProtocol(Url, MergedOptions)
 
-    try {
-      if (Protocol === 'http/2') {
-        return await this.RequestWithHTTP2(Url, MergedOptions, ExpectedAs)
-      }
-
+    if (Protocol !== 'http/2') {
       return await this.RequestWithHTTP1(Url, MergedOptions, ExpectedAs)
-    } catch (Cause) {
-      const FallbackAllowed = Protocol === 'http/2'
-        && MergedOptions.PreferredProtocol !== 'http/2'
-        && MergedOptions.PreferredProtocol !== 'http/3'
-        && IsStreamingPayload(MergedOptions.Payload) === false
+    }
 
-      if (FallbackAllowed) {
+    try {
+      return await this.RequestWithHTTP2(Url, MergedOptions, ExpectedAs)
+    } catch (Cause) {
+      if (this.ShouldAutomaticallyFallbackToHTTP1(MergedOptions, Cause)) {
         this.MarkOriginAsHTTP1Only(Url)
         return await this.RequestWithHTTP1(Url, MergedOptions, ExpectedAs)
       }
@@ -127,8 +135,11 @@ export class SecureReq {
     }
 
     return {
-      ...Capabilities,
+      Origin: Capabilities.Origin,
+      ProbeCompleted: Capabilities.ProbeCompleted,
+      PreferredProtocol: Capabilities.PreferredProtocol,
       SupportedCompressions: [...Capabilities.SupportedCompressions],
+      HTTP3Advertised: Capabilities.HTTP3Advertised,
     }
   }
 
@@ -156,8 +167,10 @@ export class SecureReq {
       HttpMethod: Options?.HttpMethod ?? this.DefaultOptions.HttpMethod,
       PreferredProtocol: Options?.PreferredProtocol ?? this.DefaultOptions.PreferredProtocol,
       EnableCompression: Options?.EnableCompression ?? this.DefaultOptions.EnableCompression,
+      TimeoutMs: Options?.TimeoutMs ?? this.DefaultOptions.TimeoutMs,
       Payload: Options?.Payload,
       ExpectedAs: Options?.ExpectedAs,
+      Signal: Options?.Signal,
     }
   }
 
@@ -200,11 +213,19 @@ export class SecureReq {
       return 'http/1.1'
     }
 
-    if (OriginCapabilities.PreferredProtocol === 'http/1.1') {
+    if (OriginCapabilities.HTTP2Support === 'supported') {
+      return 'http/2'
+    }
+
+    if (OriginCapabilities.HTTP2Support === 'unsupported') {
       return 'http/1.1'
     }
 
-    return 'http/2'
+    if (this.CanAttemptAutomaticHTTP2Probe(Options)) {
+      return 'http/2'
+    }
+
+    return 'http/1.1'
   }
 
   private BuildRequestHeaders(Url: URL, Options: HTTPSRequestOptions): {
@@ -350,13 +371,19 @@ export class SecureReq {
   private async RequestWithHTTP2<E extends ExpectedAsKey>(Url: URL, Options: HTTPSRequestOptions<E>, ExpectedAs: E): Promise<HTTPSResponse<ExpectedAsMap[E]>> {
     const { Headers, RequestedCompressions } = this.BuildRequestHeaders(Url, Options)
     const Session = await this.GetOrCreateHTTP2Session(Url, Options)
-    const Request = Session.request({
-      ':method': Options.HttpMethod,
-      ':path': Url.pathname + Url.search,
-      ':scheme': 'https',
-      ':authority': Headers.host ?? Url.host,
-      ...this.FilterHTTP2Headers(Headers),
-    })
+    let Request: HTTP2.ClientHttp2Stream
+
+    try {
+      Request = Session.request({
+        ':method': Options.HttpMethod,
+        ':path': Url.pathname + Url.search,
+        ':scheme': 'https',
+        ':authority': Headers.host ?? Url.host,
+        ...this.FilterHTTP2Headers(Headers),
+      })
+    } catch (Cause) {
+      throw new HTTP2NegotiationError('Failed to start HTTP/2 request', { cause: Cause })
+    }
 
     return await new Promise<HTTPSResponse<ExpectedAsMap[E]>>((Resolve, Reject) => {
       let Settled = false
@@ -450,56 +477,66 @@ export class SecureReq {
       return ExistingSession
     }
 
-    const Session = HTTP2.connect(GetOriginKey(Url), {
-      createConnection: () => TLS.connect({
-        host: Url.hostname,
-        port: Number(Url.port || 443),
-        servername: Url.hostname,
-        minVersion: Options.TLS?.MinTLSVersion,
-        maxVersion: Options.TLS?.MaxTLSVersion,
-        ciphers: Options.TLS?.Ciphers?.join(':'),
-        ecdhCurve: Options.TLS?.KeyExchanges?.join(':'),
-        rejectUnauthorized: Options.TLS?.RejectUnauthorized,
-        ALPNProtocols: ['h2', 'http/1.1'],
-      }),
-    })
+    const SessionPromise = (async () => {
+      const Socket = await this.CreateNegotiatedHTTP2Socket(Url, Options)
+      const Session = HTTP2.connect(GetOriginKey(Url), {
+        createConnection: () => Socket,
+      })
 
-    this.ConfigureHTTP2Session(SessionKey, Session)
-    this.HTTP2SessionCache.set(SessionKey, Session)
+      this.ConfigureHTTP2Session(SessionKey, Session)
+      this.HTTP2SessionCache.set(SessionKey, Session)
 
-    const SessionPromise = new Promise<HTTP2.ClientHttp2Session>((Resolve, Reject) => {
-      const Cleanup = () => {
-        Session.off('connect', HandleConnect)
-        Session.off('error', HandleError)
-        Session.off('close', HandleClose)
-      }
+      return await new Promise<HTTP2.ClientHttp2Session>((Resolve, Reject) => {
+        let Connected = false
 
-      const HandleConnect = () => {
-        Cleanup()
-        this.PendingHTTP2SessionCache.delete(SessionKey)
-        Resolve(Session)
-      }
+        const Cleanup = () => {
+          Session.off('connect', HandleConnect)
+          Session.off('error', HandleError)
+          Session.off('close', HandleClose)
+        }
 
-      const HandleError = (Cause: unknown) => {
-        Cleanup()
-        this.PendingHTTP2SessionCache.delete(SessionKey)
-        this.InvalidateHTTP2Session(Url, Options, Session)
-        Reject(ToError(Cause))
-      }
+        const HandleConnect = () => {
+          Connected = true
+          Cleanup()
+          Resolve(Session)
+        }
 
-      const HandleClose = () => {
-        Cleanup()
-        this.PendingHTTP2SessionCache.delete(SessionKey)
-        Reject(new Error('HTTP/2 session closed before it became ready'))
-      }
+        const HandleError = (Cause: unknown) => {
+          Cleanup()
+          this.InvalidateHTTP2Session(Url, Options, Session)
+          Reject(
+            Connected
+              ? ToError(Cause)
+              : (Cause instanceof HTTP2NegotiationError
+                ? Cause
+                : new HTTP2NegotiationError('Failed to establish HTTP/2 session', { cause: Cause })),
+          )
+        }
 
-      Session.once('connect', HandleConnect)
-      Session.once('error', HandleError)
-      Session.once('close', HandleClose)
-    })
+        const HandleClose = () => {
+          Cleanup()
+          Reject(
+            Connected
+              ? new Error('HTTP/2 session closed before it became ready')
+              : new HTTP2NegotiationError('HTTP/2 session negotiation closed before it became ready'),
+          )
+        }
+
+        Session.once('connect', HandleConnect)
+        Session.once('error', HandleError)
+        Session.once('close', HandleClose)
+      })
+    })()
 
     this.PendingHTTP2SessionCache.set(SessionKey, SessionPromise)
-    return await SessionPromise
+
+    try {
+      return await SessionPromise
+    } finally {
+      if (this.PendingHTTP2SessionCache.get(SessionKey) === SessionPromise) {
+        this.PendingHTTP2SessionCache.delete(SessionKey)
+      }
+    }
   }
 
   private GetHTTP2SessionKey(Url: URL, Options: HTTPSRequestOptions): string {
@@ -539,7 +576,7 @@ export class SecureReq {
   }
 
   private async FinalizeResponse<E extends ExpectedAsKey>(Context: FinalizeResponseContext<E>): Promise<HTTPSResponse<ExpectedAsMap[E]>> {
-    this.UpdateOriginCapabilities(Context.Url, Context.Headers, Context.RequestedCompressions)
+    this.UpdateOriginCapabilities(Context.Url, Context.Protocol, Context.Headers, Context.RequestedCompressions)
 
     let ResponseStream = Context.ResponseStream
     let ContentEncoding: HTTPCompressionAlgorithm | 'identity' = 'identity'
@@ -605,29 +642,34 @@ export class SecureReq {
 
   private UpdateOriginCapabilities(
     Url: URL,
+    Protocol: 'http/1.1' | 'http/2',
     Headers: Record<string, string | string[] | undefined>,
     RequestedCompressions: HTTPCompressionAlgorithm[],
   ): void {
     const Origin = GetOriginKey(Url)
     const ExistingCapabilities = this.GetCachedOriginCapabilities(Origin)
     const NegotiatedCompressions = this.ResolveNegotiatedCompressions(Headers, RequestedCompressions)
-    const HTTP3Advertised = this.IsHTTP3Advertised(Headers)
+    const HTTP2Support = Protocol === 'http/2'
+      ? 'supported'
+      : (ExistingCapabilities?.HTTP2Support ?? 'unknown')
+    const HTTP3Advertised = this.IsHTTP3Advertised(Headers) || (ExistingCapabilities?.HTTP3Advertised ?? false)
 
     this.SetOriginCapabilities({
       Origin,
       ProbeCompleted: true,
-      PreferredProtocol: Url.protocol === 'https:' ? 'http/2' : 'http/1.1',
-      SupportedCompressions: NegotiatedCompressions.length > 0
+      PreferredProtocol: Url.protocol === 'https:' && HTTP2Support === 'supported' ? 'http/2' : 'http/1.1',
+      SupportedCompressions: NegotiatedCompressions !== undefined
         ? NegotiatedCompressions
-        : [...(ExistingCapabilities?.SupportedCompressions ?? RequestedCompressions)],
+        : [...(ExistingCapabilities?.SupportedCompressions ?? [])],
       HTTP3Advertised,
+      HTTP2Support,
     })
   }
 
   private ResolveNegotiatedCompressions(
     Headers: Record<string, string | string[] | undefined>,
     RequestedCompressions: HTTPCompressionAlgorithm[],
-  ): HTTPCompressionAlgorithm[] {
+  ): HTTPCompressionAlgorithm[] | undefined {
     const ServerAcceptEncoding = ParseCompressionAlgorithms(GetHeaderValue(Headers, 'accept-encoding'))
     if (ServerAcceptEncoding.length > 0) {
       return IntersectCompressionAlgorithms(RequestedCompressions, ServerAcceptEncoding)
@@ -638,7 +680,7 @@ export class SecureReq {
       return IntersectCompressionAlgorithms(RequestedCompressions, ContentEncoding)
     }
 
-    return [...RequestedCompressions]
+    return undefined
   }
 
   private IsHTTP3Advertised(Headers: Record<string, string | string[] | undefined>): boolean {
@@ -654,12 +696,13 @@ export class SecureReq {
       Origin,
       ProbeCompleted: true,
       PreferredProtocol: 'http/1.1',
-      SupportedCompressions: [...(ExistingCapabilities?.SupportedCompressions ?? this.SupportedCompressions)],
+      SupportedCompressions: [...(ExistingCapabilities?.SupportedCompressions ?? [])],
       HTTP3Advertised: ExistingCapabilities?.HTTP3Advertised ?? false,
+      HTTP2Support: 'unsupported',
     })
   }
 
-  private GetCachedOriginCapabilities(UrlOrOrigin: URL | string): OriginCapabilities | undefined {
+  private GetCachedOriginCapabilities(UrlOrOrigin: URL | string): CachedOriginCapabilities | undefined {
     const Origin = typeof UrlOrOrigin === 'string' ? UrlOrOrigin : GetOriginKey(UrlOrOrigin)
     const Capabilities = this.OriginCapabilityCache.get(Origin)
 
@@ -672,7 +715,7 @@ export class SecureReq {
     return Capabilities
   }
 
-  private SetOriginCapabilities(Capabilities: OriginCapabilities): void {
+  private SetOriginCapabilities(Capabilities: CachedOriginCapabilities): void {
     if (this.OriginCapabilityCache.has(Capabilities.Origin)) {
       this.OriginCapabilityCache.delete(Capabilities.Origin)
     }
@@ -718,6 +761,72 @@ export class SecureReq {
       this.HTTP2SessionCache.delete(SessionKey)
       this.PendingHTTP2SessionCache.delete(SessionKey)
     })
+  }
+
+  private async CreateNegotiatedHTTP2Socket(Url: URL, Options: HTTPSRequestOptions): Promise<TLS.TLSSocket> {
+    return await new Promise<TLS.TLSSocket>((Resolve, Reject) => {
+      const Socket = TLS.connect({
+        host: Url.hostname,
+        port: Number(Url.port || 443),
+        servername: Url.hostname,
+        minVersion: Options.TLS?.MinTLSVersion,
+        maxVersion: Options.TLS?.MaxTLSVersion,
+        ciphers: Options.TLS?.Ciphers?.join(':'),
+        ecdhCurve: Options.TLS?.KeyExchanges?.join(':'),
+        rejectUnauthorized: Options.TLS?.RejectUnauthorized,
+        ALPNProtocols: ['h2', 'http/1.1'],
+      })
+
+      const Cleanup = () => {
+        Socket.off('secureConnect', HandleSecureConnect)
+        Socket.off('error', HandleError)
+        Socket.off('close', HandleClose)
+      }
+
+      const RejectWithNegotiationError = (Message: string, Cause?: unknown) => {
+        Cleanup()
+
+        if (Socket.destroyed === false) {
+          Socket.destroy()
+        }
+
+        Reject(new HTTP2NegotiationError(Message, Cause === undefined ? undefined : { cause: Cause }))
+      }
+
+      const HandleSecureConnect = () => {
+        if (Socket.alpnProtocol !== 'h2') {
+          RejectWithNegotiationError('Origin did not negotiate HTTP/2 via ALPN')
+          return
+        }
+
+        Cleanup()
+        Resolve(Socket)
+      }
+
+      const HandleError = (Cause: unknown) => {
+        RejectWithNegotiationError('Failed to negotiate HTTP/2 session', Cause)
+      }
+
+      const HandleClose = () => {
+        RejectWithNegotiationError('HTTP/2 session negotiation closed before it became ready')
+      }
+
+      Socket.once('secureConnect', HandleSecureConnect)
+      Socket.once('error', HandleError)
+      Socket.once('close', HandleClose)
+    })
+  }
+
+  private CanAttemptAutomaticHTTP2Probe(Options: HTTPSRequestOptions): boolean {
+    return IsAutomaticHTTP2ProbeMethod(Options.HttpMethod)
+      && Options.Payload === undefined
+      && Options.PreferredProtocol === 'auto'
+  }
+
+  private ShouldAutomaticallyFallbackToHTTP1(Options: HTTPSRequestOptions, Cause: unknown): boolean {
+    return IsHTTP2NegotiationError(Cause)
+      && Options.PreferredProtocol === 'auto'
+      && this.CanAttemptAutomaticHTTP2Probe(Options)
   }
 
   private AttachRequestCancellation(
