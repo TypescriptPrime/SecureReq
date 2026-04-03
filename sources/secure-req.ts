@@ -15,7 +15,6 @@ import {
   DetermineExpectedAs,
   HTTP2NegotiationError,
   IsAutomaticHTTP2ProbeMethod,
-  IsHTTP2NegotiationError,
   ToError,
 } from './request-helpers.js'
 import { RequestOptionsSchema, SecureReqOptionsSchema } from './request-schema.js'
@@ -55,6 +54,11 @@ interface FinalizeResponseContext<E extends ExpectedAsKey> {
   Headers: Record<string, string | string[] | undefined>,
   ResponseStream: Readable,
   RequestedCompressions: HTTPCompressionAlgorithm[]
+}
+
+interface NegotiatedSecureTransport {
+  Protocol: 'http/1.1' | 'http/2',
+  Socket: TLS.TLSSocket
 }
 
 interface CachedOriginCapabilities extends OriginCapabilities {
@@ -110,21 +114,25 @@ export class SecureReq {
     this.ValidateRequest(Url, MergedOptions)
 
     const Protocol = this.ResolveTransportProtocol(Url, MergedOptions)
+    const PreconnectedTransport = this.ShouldNegotiateSecureTransport(Url, MergedOptions, Protocol)
+      ? await this.NegotiateSecureTransport(Url, MergedOptions)
+      : undefined
+
+    if (PreconnectedTransport?.Protocol === 'http/1.1') {
+      if (MergedOptions.PreferredProtocol === 'http/2' || MergedOptions.PreferredProtocol === 'http/3') {
+        PreconnectedTransport.Socket.destroy()
+        throw new HTTP2NegotiationError('Origin did not negotiate HTTP/2 via ALPN')
+      }
+
+      this.MarkOriginAsHTTP1Only(Url)
+      return await this.RequestWithHTTP1(Url, MergedOptions, ExpectedAs, PreconnectedTransport.Socket)
+    }
 
     if (Protocol !== 'http/2') {
       return await this.RequestWithHTTP1(Url, MergedOptions, ExpectedAs)
     }
 
-    try {
-      return await this.RequestWithHTTP2(Url, MergedOptions, ExpectedAs)
-    } catch (Cause) {
-      if (this.ShouldAutomaticallyFallbackToHTTP1(MergedOptions, Cause)) {
-        this.MarkOriginAsHTTP1Only(Url)
-        return await this.RequestWithHTTP1(Url, MergedOptions, ExpectedAs)
-      }
-
-      throw Cause
-    }
+    return await this.RequestWithHTTP2(Url, MergedOptions, ExpectedAs, PreconnectedTransport?.Socket)
   }
 
   public GetOriginCapabilities(Url: URL): OriginCapabilities | undefined {
@@ -262,7 +270,12 @@ export class SecureReq {
     return [...this.SupportedCompressions]
   }
 
-  private async RequestWithHTTP1<E extends ExpectedAsKey>(Url: URL, Options: HTTPSRequestOptions<E>, ExpectedAs: E): Promise<HTTPSResponse<ExpectedAsMap[E]>> {
+  private async RequestWithHTTP1<E extends ExpectedAsKey>(
+    Url: URL,
+    Options: HTTPSRequestOptions<E>,
+    ExpectedAs: E,
+    PreconnectedSocket?: TLS.TLSSocket,
+  ): Promise<HTTPSResponse<ExpectedAsMap[E]>> {
     const { Headers, RequestedCompressions } = this.BuildRequestHeaders(Url, Options)
 
     return await new Promise<HTTPSResponse<ExpectedAsMap[E]>>((Resolve, Reject) => {
@@ -317,7 +330,7 @@ export class SecureReq {
           CleanupCancellation()
           ResolveOnce(ResponseValue)
         }, RejectOnce)
-      })
+      }, PreconnectedSocket)
 
       const CancelRequest = (Cause: Error) => {
         Request.destroy(Cause)
@@ -343,6 +356,7 @@ export class SecureReq {
     Options: HTTPSRequestOptions,
     Headers: Record<string, string>,
     OnResponse: (Response: HTTP.IncomingMessage) => void,
+    PreconnectedSocket?: TLS.TLSSocket,
   ): HTTP.ClientRequest {
     const BaseOptions = {
       protocol: Url.protocol,
@@ -354,23 +368,42 @@ export class SecureReq {
     }
 
     if (Url.protocol === 'https:') {
+      const Agent = PreconnectedSocket ? new HTTPS.Agent({ keepAlive: false }) : undefined
+
+      if (Agent) {
+        Agent.createConnection = () => PreconnectedSocket
+      }
+
       return HTTPS.request({
         ...BaseOptions,
+        agent: Agent,
         servername: Url.hostname,
         minVersion: Options.TLS?.MinTLSVersion,
         maxVersion: Options.TLS?.MaxTLSVersion,
         ciphers: Options.TLS?.Ciphers?.join(':'),
         ecdhCurve: Options.TLS?.KeyExchanges?.join(':'),
         rejectUnauthorized: Options.TLS?.RejectUnauthorized,
-      }, OnResponse)
+      }, Response => {
+        Response.once('close', () => {
+          Agent?.destroy()
+        })
+        OnResponse(Response)
+      }).once('error', () => {
+        Agent?.destroy()
+      })
     }
 
     return HTTP.request(BaseOptions, OnResponse)
   }
 
-  private async RequestWithHTTP2<E extends ExpectedAsKey>(Url: URL, Options: HTTPSRequestOptions<E>, ExpectedAs: E): Promise<HTTPSResponse<ExpectedAsMap[E]>> {
+  private async RequestWithHTTP2<E extends ExpectedAsKey>(
+    Url: URL,
+    Options: HTTPSRequestOptions<E>,
+    ExpectedAs: E,
+    PreconnectedSocket?: TLS.TLSSocket,
+  ): Promise<HTTPSResponse<ExpectedAsMap[E]>> {
     const { Headers, RequestedCompressions } = this.BuildRequestHeaders(Url, Options)
-    const Session = await this.GetOrCreateHTTP2Session(Url, Options)
+    const Session = await this.GetOrCreateHTTP2Session(Url, Options, PreconnectedSocket)
     let Request: HTTP2.ClientHttp2Stream
 
     try {
@@ -463,7 +496,11 @@ export class SecureReq {
     })
   }
 
-  private async GetOrCreateHTTP2Session(Url: URL, Options: HTTPSRequestOptions): Promise<HTTP2.ClientHttp2Session> {
+  private async GetOrCreateHTTP2Session(
+    Url: URL,
+    Options: HTTPSRequestOptions,
+    PreconnectedSocket?: TLS.TLSSocket,
+  ): Promise<HTTP2.ClientHttp2Session> {
     const SessionKey = this.GetHTTP2SessionKey(Url, Options)
     const PendingSession = this.PendingHTTP2SessionCache.get(SessionKey)
 
@@ -478,9 +515,20 @@ export class SecureReq {
     }
 
     const SessionPromise = (async () => {
-      const Socket = await this.CreateNegotiatedHTTP2Socket(Url, Options)
+      const NegotiatedTransport = PreconnectedSocket
+        ? {
+          Protocol: 'http/2',
+          Socket: PreconnectedSocket,
+        } satisfies NegotiatedSecureTransport
+        : await this.NegotiateSecureTransport(Url, Options)
+
+      if (NegotiatedTransport.Protocol !== 'http/2') {
+        NegotiatedTransport.Socket.destroy()
+        throw new HTTP2NegotiationError('Origin did not negotiate HTTP/2 via ALPN')
+      }
+
       const Session = HTTP2.connect(GetOriginKey(Url), {
-        createConnection: () => Socket,
+        createConnection: () => NegotiatedTransport.Socket,
       })
 
       this.ConfigureHTTP2Session(SessionKey, Session)
@@ -763,8 +811,8 @@ export class SecureReq {
     })
   }
 
-  private async CreateNegotiatedHTTP2Socket(Url: URL, Options: HTTPSRequestOptions): Promise<TLS.TLSSocket> {
-    return await new Promise<TLS.TLSSocket>((Resolve, Reject) => {
+  private async NegotiateSecureTransport(Url: URL, Options: HTTPSRequestOptions): Promise<NegotiatedSecureTransport> {
+    return await new Promise<NegotiatedSecureTransport>((Resolve, Reject) => {
       const Socket = TLS.connect({
         host: Url.hostname,
         port: Number(Url.port || 443),
@@ -794,13 +842,11 @@ export class SecureReq {
       }
 
       const HandleSecureConnect = () => {
-        if (Socket.alpnProtocol !== 'h2') {
-          RejectWithNegotiationError('Origin did not negotiate HTTP/2 via ALPN')
-          return
-        }
-
         Cleanup()
-        Resolve(Socket)
+        Resolve({
+          Protocol: Socket.alpnProtocol === 'h2' ? 'http/2' : 'http/1.1',
+          Socket,
+        })
       }
 
       const HandleError = (Cause: unknown) => {
@@ -817,16 +863,27 @@ export class SecureReq {
     })
   }
 
+  private HasReusableHTTP2Session(Url: URL, Options: HTTPSRequestOptions): boolean {
+    const Session = this.HTTP2SessionCache.get(this.GetHTTP2SessionKey(Url, Options))
+    return Session !== undefined && Session.closed === false && Session.destroyed === false
+  }
+
+  private ShouldNegotiateSecureTransport(
+    Url: URL,
+    Options: HTTPSRequestOptions,
+    Protocol: 'http/1.1' | 'http/2',
+  ): boolean {
+    if (Url.protocol !== 'https:' || Protocol !== 'http/2') {
+      return false
+    }
+
+    return this.HasReusableHTTP2Session(Url, Options) === false
+  }
+
   private CanAttemptAutomaticHTTP2Probe(Options: HTTPSRequestOptions): boolean {
     return IsAutomaticHTTP2ProbeMethod(Options.HttpMethod)
       && Options.Payload === undefined
       && Options.PreferredProtocol === 'auto'
-  }
-
-  private ShouldAutomaticallyFallbackToHTTP1(Options: HTTPSRequestOptions, Cause: unknown): boolean {
-    return IsHTTP2NegotiationError(Cause)
-      && Options.PreferredProtocol === 'auto'
-      && this.CanAttemptAutomaticHTTP2Probe(Options)
   }
 
   private AttachRequestCancellation(
