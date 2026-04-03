@@ -99,7 +99,7 @@ Fields:
 - `ExpectedAs?: 'JSON'|'String'|'ArrayBuffer'|'Stream'` — How to parse the response body.
   - Omitting `ExpectedAs` keeps the runtime extension heuristic (`.json`, `.txt`, fallback `ArrayBuffer`) but the body type is intentionally `unknown`.
 - `PreferredProtocol?: 'auto'|'http/1.1'|'http/2'|'http/3'`
-  - `http/3` is currently a placeholder branch and falls back to `http/2`.
+  - `http/3` is currently a placeholder preference and uses the same TCP/TLS negotiation path as `http/2` until native HTTP/3 transport is added.
 - `EnableCompression?: boolean` — Enables automatic `Accept-Encoding` negotiation and transparent response decompression.
 - `TimeoutMs?: number` — Aborts the request if headers or body transfer exceed the given number of milliseconds.
 - `Signal?: AbortSignal` — Cancels the request using a standard abort signal.
@@ -121,6 +121,7 @@ Notes:
 
 - Strict TLS defaults lean on **TLSv1.3** and a reduced cipher list to encourage secure transport out of the box.
 - TLS options are forwarded to Node's HTTPS or http/2 TLS layer (`minVersion`, `maxVersion`, `ciphers`, `ecdhCurve`).
+- When SecureReq performs an ALPN probe for HTTPS, the negotiated `TLSSocket` is reused for the actual `http/2` or `http/1.1` request instead of opening a second TLS connection.
 - The library uses `zod` for runtime validation of options.
 - Compression negotiation is origin-scoped. Subdomains are tracked independently.
 - `GetOriginCapabilities().PreferredProtocol` is updated from actual observed transport, and automatic fallback only occurs for safe negotiation failures before request bytes are sent.
