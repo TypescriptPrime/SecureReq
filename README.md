@@ -90,8 +90,8 @@ for await (const chunk of streamed.Body) {
 - `Options?: HTTPSRequestOptions` — Optional configuration object.
 
 Returns:
-- `ExpectedAs`를 명시하면 `Promise<HTTPSResponse<T>>`
-- `ExpectedAs`를 생략하면 `Promise<HTTPSResponse<unknown>>`
+- If `ExpectedAs` is specified, `Promise<HTTPSResponse<T>>`
+- If `ExpectedAs` is omitted, `Promise<HTTPSResponse<unknown>>`
 
 Throws:
 - `TypeError` when `Url` is not a `URL` instance.
