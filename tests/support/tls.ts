@@ -67,8 +67,8 @@ export async function CreateTestTLSCertificate(): Promise<TestTLSCertificate> {
         await Fs.rm(TemporaryDirectory, { recursive: true, force: true })
       },
     }
-  } catch (Error) {
+  } catch (Cause) {
     await Fs.rm(TemporaryDirectory, { recursive: true, force: true })
-    throw Error
+    throw Cause
   }
 }

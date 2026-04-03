@@ -25,13 +25,16 @@ export interface HTTPSRequestOptions<E extends ExpectedAsKey = ExpectedAsKey> {
   Payload?: HTTPSRequestPayload,
   ExpectedAs?: E,
   PreferredProtocol?: HTTPProtocolPreference,
-  EnableCompression?: boolean
+  EnableCompression?: boolean,
+  TimeoutMs?: number,
+  Signal?: AbortSignal
 }
 
 export interface SecureReqOptions {
-  DefaultOptions?: Omit<HTTPSRequestOptions, 'Payload' | 'ExpectedAs'>,
+  DefaultOptions?: Omit<HTTPSRequestOptions, 'Payload' | 'ExpectedAs' | 'Signal'>,
   SupportedCompressions?: HTTPCompressionAlgorithm[],
   HTTP2SessionIdleTimeout?: number
+  OriginCapabilityCacheLimit?: number
 }
 
 export interface HTTPSResponse<T = unknown> {

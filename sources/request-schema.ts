@@ -1,6 +1,6 @@
 import * as Zod from 'zod'
 import { AvailableTLSCiphers } from './constants.js'
-import { IsStreamingPayload } from './utils.js'
+import { IsAbortSignal, IsStreamingPayload } from './utils.js'
 import type { HTTPSRequestOptions } from './type.js'
 
 export const RequestOptionsSchema = Zod.strictObject({
@@ -27,4 +27,8 @@ export const RequestOptionsSchema = Zod.strictObject({
   ExpectedAs: Zod.enum(['JSON', 'String', 'ArrayBuffer', 'Stream']).optional(),
   PreferredProtocol: Zod.enum(['auto', 'http/1.1', 'http/2', 'http/3']).optional(),
   EnableCompression: Zod.boolean().optional(),
+  TimeoutMs: Zod.number().positive().optional(),
+  Signal: Zod.custom<AbortSignal>(Value => IsAbortSignal(Value), {
+    message: 'Signal must be an AbortSignal',
+  }).optional(),
 })

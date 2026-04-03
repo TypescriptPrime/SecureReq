@@ -35,7 +35,7 @@ test('SecureReq probes with http/1.1 then upgrades to http/2 with negotiated com
   T.truthy(Capabilities)
   T.deepEqual(Capabilities?.SupportedCompressions, ['gzip'])
   T.true(Capabilities?.HTTP3Advertised ?? false)
-  T.is(Capabilities?.PreferredProtocol, 'http/3')
+  T.is(Capabilities?.PreferredProtocol, 'http/2')
 })
 
 for (const Encoding of ['gzip', 'deflate', 'zstd'] as const) {
@@ -128,4 +128,119 @@ test('SecureReq supports explicit protocol preferences without legacy wrappers',
 
   T.is(HTTP2Response.Protocol, 'http/2')
   T.is(HTTP2Response.Body, 'plain:http/2')
+})
+
+test('SecureReq evicts least-recently-used origin capability entries', async T => {
+  const TestServers = await Promise.all([StartTestServer(), StartTestServer()])
+  const [FirstServer, SecondServer] = TestServers
+  const Client = new SecureReq({
+    OriginCapabilityCacheLimit: 1,
+    DefaultOptions: {
+      TLS: {
+        RejectUnauthorized: false,
+      },
+    },
+  })
+
+  T.teardown(async () => {
+    Client.Close()
+    await Promise.all(TestServers.map(async TestServer => {
+      await TestServer.Close()
+    }))
+  })
+
+  await Client.Request(new URL('/negotiate', FirstServer.BaseUrl), { ExpectedAs: 'JSON' })
+  T.truthy(Client.GetOriginCapabilities(new URL(FirstServer.BaseUrl)))
+
+  await Client.Request(new URL('/negotiate', SecondServer.BaseUrl), { ExpectedAs: 'JSON' })
+
+  T.is(Client.GetOriginCapabilities(new URL(FirstServer.BaseUrl)), undefined)
+  T.truthy(Client.GetOriginCapabilities(new URL(SecondServer.BaseUrl)))
+})
+
+test('SecureReq enforces per-request timeouts while waiting for response headers', async T => {
+  const TestServer = await StartTestServer()
+  const Client = new SecureReq({
+    DefaultOptions: {
+      TLS: {
+        RejectUnauthorized: false,
+      },
+    },
+  })
+
+  T.teardown(async () => {
+    Client.Close()
+    await TestServer.Close()
+  })
+
+  const Error = await T.throwsAsync(async () => {
+    await Client.Request(new URL('/slow-headers', TestServer.BaseUrl), {
+      ExpectedAs: 'String',
+      TimeoutMs: 20,
+    })
+  })
+
+  T.is(Error?.name, 'TimeoutError')
+  T.is(Error?.message, 'Request timed out after 20ms')
+})
+
+test('SecureReq keeps request timeouts active for streaming responses', async T => {
+  const TestServer = await StartTestServer()
+  const Client = new SecureReq({
+    DefaultOptions: {
+      TLS: {
+        RejectUnauthorized: false,
+      },
+    },
+  })
+
+  T.teardown(async () => {
+    Client.Close()
+    await TestServer.Close()
+  })
+
+  const Response = await Client.Request(new URL('/slow-stream', TestServer.BaseUrl), {
+    ExpectedAs: 'Stream',
+    TimeoutMs: 20,
+  })
+
+  const Error = await T.throwsAsync(async () => {
+    await ReadStreamAsString(Response.Body)
+  })
+
+  T.is(Error?.name, 'TimeoutError')
+  T.is(Error?.message, 'Request timed out after 20ms')
+})
+
+test('SecureReq supports AbortSignal cancellation', async T => {
+  const TestServer = await StartTestServer()
+  const Client = new SecureReq({
+    DefaultOptions: {
+      TLS: {
+        RejectUnauthorized: false,
+      },
+    },
+  })
+
+  T.teardown(async () => {
+    Client.Close()
+    await TestServer.Close()
+  })
+
+  const Controller = new AbortController()
+  const PendingRequest = Client.Request(new URL('/slow-headers', TestServer.BaseUrl), {
+    ExpectedAs: 'String',
+    Signal: Controller.signal,
+  })
+
+  setTimeout(() => {
+    Controller.abort()
+  }, 20)
+
+  const Error = await T.throwsAsync(async () => {
+    await PendingRequest
+  })
+
+  T.is(Error?.name, 'AbortError')
+  T.is(Error?.message, 'Request was aborted')
 })

@@ -117,6 +117,14 @@ export function IsReadableStream(Value: unknown): Value is NodeJS.ReadableStream
   return typeof Value === 'object' && Value !== null && typeof (Value as NodeJS.ReadableStream).pipe === 'function'
 }
 
+export function IsAbortSignal(Value: unknown): Value is AbortSignal {
+  return typeof Value === 'object'
+    && Value !== null
+    && typeof (Value as AbortSignal).aborted === 'boolean'
+    && typeof (Value as AbortSignal).addEventListener === 'function'
+    && typeof (Value as AbortSignal).removeEventListener === 'function'
+}
+
 export function IsAsyncIterable(Value: unknown): Value is AsyncIterable<HTTPSRequestPayloadChunk> {
   return typeof Value === 'object' && Value !== null && Symbol.asyncIterator in Value
 }

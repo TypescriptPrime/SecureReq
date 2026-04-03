@@ -51,11 +51,13 @@ interface FinalizeResponseContext<E extends ExpectedAsKey> {
 }
 
 export class SecureReq {
-  private readonly DefaultOptions: Omit<HTTPSRequestOptions, 'Payload' | 'ExpectedAs'>
+  private readonly DefaultOptions: Omit<HTTPSRequestOptions, 'Payload' | 'ExpectedAs' | 'Signal'>
   private readonly SupportedCompressions: HTTPCompressionAlgorithm[]
   private readonly HTTP2SessionIdleTimeout: number
+  private readonly OriginCapabilityCacheLimit: number
   private readonly OriginCapabilityCache = new Map<string, OriginCapabilities>()
   private readonly HTTP2SessionCache = new Map<string, HTTP2.ClientHttp2Session>()
+  private readonly PendingHTTP2SessionCache = new Map<string, Promise<HTTP2.ClientHttp2Session>>()
 
   public constructor(Options: SecureReqOptions = {}) {
     this.DefaultOptions = {
@@ -70,12 +72,17 @@ export class SecureReq {
       HttpMethod: Options.DefaultOptions?.HttpMethod ?? 'GET',
       PreferredProtocol: Options.DefaultOptions?.PreferredProtocol ?? 'auto',
       EnableCompression: Options.DefaultOptions?.EnableCompression ?? true,
+      TimeoutMs: Options.DefaultOptions?.TimeoutMs,
     }
 
     this.SupportedCompressions = (Options.SupportedCompressions?.length ? Options.SupportedCompressions : DefaultSupportedCompressions)
       .filter((Value, Index, Values) => Values.indexOf(Value) === Index)
 
     this.HTTP2SessionIdleTimeout = Options.HTTP2SessionIdleTimeout ?? 30_000
+    this.OriginCapabilityCacheLimit = Number.isFinite(Options.OriginCapabilityCacheLimit)
+      && (Options.OriginCapabilityCacheLimit ?? 0) > 0
+      ? Math.floor(Options.OriginCapabilityCacheLimit ?? 0)
+      : 256
   }
 
   public async Request<E extends ExpectedAsKey = 'ArrayBuffer'>(Url: URL, Options?: HTTPSRequestOptions<E>): Promise<HTTPSResponse<ExpectedAsMap[E]>> {
@@ -97,7 +104,7 @@ export class SecureReq {
       }
 
       return await this.RequestWithHTTP1(Url, MergedOptions, ExpectedAs)
-    } catch (Error) {
+    } catch (Cause) {
       const FallbackAllowed = Protocol === 'http/2'
         && MergedOptions.PreferredProtocol !== 'http/2'
         && MergedOptions.PreferredProtocol !== 'http/3'
@@ -108,12 +115,12 @@ export class SecureReq {
         return await this.RequestWithHTTP1(Url, MergedOptions, ExpectedAs)
       }
 
-      throw Error
+      throw Cause
     }
   }
 
   public GetOriginCapabilities(Url: URL): OriginCapabilities | undefined {
-    const Capabilities = this.OriginCapabilityCache.get(GetOriginKey(Url))
+    const Capabilities = this.GetCachedOriginCapabilities(Url)
 
     if (Capabilities === undefined) {
       return undefined
@@ -130,6 +137,7 @@ export class SecureReq {
       Session.close()
     }
 
+    this.PendingHTTP2SessionCache.clear()
     this.HTTP2SessionCache.clear()
   }
 
@@ -187,7 +195,7 @@ export class SecureReq {
         break
     }
 
-    const OriginCapabilities = this.OriginCapabilityCache.get(GetOriginKey(Url))
+    const OriginCapabilities = this.GetCachedOriginCapabilities(Url)
     if (OriginCapabilities?.ProbeCompleted !== true) {
       return 'http/1.1'
     }
@@ -203,7 +211,9 @@ export class SecureReq {
     Headers: Record<string, string>,
     RequestedCompressions: HTTPCompressionAlgorithm[]
   } {
-    const Headers = NormalizeHeaders(Options.HttpHeaders)
+    const Headers = {
+      ...(Options.HttpHeaders ?? {}),
+    }
 
     if (Options.EnableCompression !== false && Headers['accept-encoding'] === undefined) {
       const AcceptedCompressions = this.GetPreferredCompressions(Url)
@@ -223,7 +233,7 @@ export class SecureReq {
   }
 
   private GetPreferredCompressions(Url: URL): HTTPCompressionAlgorithm[] {
-    const OriginCapabilities = this.OriginCapabilityCache.get(GetOriginKey(Url))
+    const OriginCapabilities = this.GetCachedOriginCapabilities(Url)
     if (OriginCapabilities?.SupportedCompressions.length) {
       return [...OriginCapabilities.SupportedCompressions]
     }
@@ -236,6 +246,12 @@ export class SecureReq {
 
     return await new Promise<HTTPSResponse<ExpectedAsMap[E]>>((Resolve, Reject) => {
       let Settled = false
+      let CleanupCancellation = () => {}
+      const CancellationTarget: { Cancel: (Cause: Error) => void } = {
+        Cancel: Cause => {
+          void Cause
+        },
+      }
 
       const ResolveOnce = (Value: HTTPSResponse<ExpectedAsMap[E]>) => {
         if (Settled === false) {
@@ -247,6 +263,7 @@ export class SecureReq {
       const RejectOnce = (Error: unknown) => {
         if (Settled === false) {
           Settled = true
+          CleanupCancellation()
           Reject(ToError(Error))
         }
       }
@@ -261,14 +278,41 @@ export class SecureReq {
           Headers: NormalizeIncomingHeaders(Response.headers as Record<string, unknown>),
           ResponseStream: Response,
           RequestedCompressions,
-        }).then(ResolveOnce, RejectOnce)
+        }).then(ResponseValue => {
+          if (ExpectedAs === 'Stream') {
+            const ResponseBody = ResponseValue.Body as ExpectedAsMap['Stream']
+
+            CancellationTarget.Cancel = Cause => {
+              ResponseBody.destroy(Cause)
+              Request.destroy(Cause)
+              RejectOnce(Cause)
+            }
+
+            this.BindRequestCleanupToResponseStream(ResponseBody, CleanupCancellation)
+            ResolveOnce(ResponseValue)
+            return
+          }
+
+          CleanupCancellation()
+          ResolveOnce(ResponseValue)
+        }, RejectOnce)
+      })
+
+      const CancelRequest = (Cause: Error) => {
+        Request.destroy(Cause)
+        RejectOnce(Cause)
+      }
+
+      CancellationTarget.Cancel = CancelRequest
+      CleanupCancellation = this.AttachRequestCancellation(Options, Cause => {
+        CancellationTarget.Cancel(Cause)
       })
 
       Request.once('error', RejectOnce)
 
-      void this.WritePayload(Request, Options.Payload).catch(Error => {
-        Request.destroy(ToError(Error))
-        RejectOnce(Error)
+      void this.WritePayload(Request, Options.Payload).catch(Cause => {
+        Request.destroy(ToError(Cause))
+        RejectOnce(Cause)
       })
     })
   }
@@ -305,7 +349,7 @@ export class SecureReq {
 
   private async RequestWithHTTP2<E extends ExpectedAsKey>(Url: URL, Options: HTTPSRequestOptions<E>, ExpectedAs: E): Promise<HTTPSResponse<ExpectedAsMap[E]>> {
     const { Headers, RequestedCompressions } = this.BuildRequestHeaders(Url, Options)
-    const Session = this.GetOrCreateHTTP2Session(Url, Options)
+    const Session = await this.GetOrCreateHTTP2Session(Url, Options)
     const Request = Session.request({
       ':method': Options.HttpMethod,
       ':path': Url.pathname + Url.search,
@@ -316,6 +360,12 @@ export class SecureReq {
 
     return await new Promise<HTTPSResponse<ExpectedAsMap[E]>>((Resolve, Reject) => {
       let Settled = false
+      let CleanupCancellation = () => {}
+      const CancellationTarget: { Cancel: (Cause: Error) => void } = {
+        Cancel: Cause => {
+          void Cause
+        },
+      }
 
       const ResolveOnce = (Value: HTTPSResponse<ExpectedAsMap[E]>) => {
         if (Settled === false) {
@@ -327,6 +377,7 @@ export class SecureReq {
       const RejectOnce = (Error: unknown) => {
         if (Settled === false) {
           Settled = true
+          CleanupCancellation()
           this.InvalidateHTTP2Session(Url, Options, Session)
           Reject(ToError(Error))
         }
@@ -342,20 +393,57 @@ export class SecureReq {
           Headers: NormalizeIncomingHeaders(ResponseHeaders as Record<string, unknown>),
           ResponseStream: Request,
           RequestedCompressions,
-        }).then(ResolveOnce, RejectOnce)
+        }).then(ResponseValue => {
+          if (ExpectedAs === 'Stream') {
+            const ResponseBody = ResponseValue.Body as ExpectedAsMap['Stream']
+
+            CancellationTarget.Cancel = Cause => {
+              ResponseBody.destroy(Cause)
+
+              if (ResponseBody !== Request) {
+                Request.destroy(Cause)
+              }
+
+              RejectOnce(Cause)
+            }
+
+            this.BindRequestCleanupToResponseStream(ResponseBody, CleanupCancellation)
+            ResolveOnce(ResponseValue)
+            return
+          }
+
+          CleanupCancellation()
+          ResolveOnce(ResponseValue)
+        }, RejectOnce)
+      })
+
+      const CancelRequest = (Cause: Error) => {
+        Request.destroy(Cause)
+        RejectOnce(Cause)
+      }
+
+      CancellationTarget.Cancel = CancelRequest
+      CleanupCancellation = this.AttachRequestCancellation(Options, Cause => {
+        CancellationTarget.Cancel(Cause)
       })
 
       Request.once('error', RejectOnce)
 
-      void this.WritePayload(Request, Options.Payload).catch(Error => {
-        Request.destroy(ToError(Error))
-        RejectOnce(Error)
+      void this.WritePayload(Request, Options.Payload).catch(Cause => {
+        Request.destroy(ToError(Cause))
+        RejectOnce(Cause)
       })
     })
   }
 
-  private GetOrCreateHTTP2Session(Url: URL, Options: HTTPSRequestOptions): HTTP2.ClientHttp2Session {
+  private async GetOrCreateHTTP2Session(Url: URL, Options: HTTPSRequestOptions): Promise<HTTP2.ClientHttp2Session> {
     const SessionKey = this.GetHTTP2SessionKey(Url, Options)
+    const PendingSession = this.PendingHTTP2SessionCache.get(SessionKey)
+
+    if (PendingSession) {
+      return await PendingSession
+    }
+
     const ExistingSession = this.HTTP2SessionCache.get(SessionKey)
 
     if (ExistingSession && ExistingSession.closed === false && ExistingSession.destroyed === false) {
@@ -376,32 +464,42 @@ export class SecureReq {
       }),
     })
 
-    Session.setTimeout(this.HTTP2SessionIdleTimeout, () => {
-      Session.close()
-    })
-
-    if (typeof Session.unref === 'function') {
-      Session.unref()
-    }
-
-    Session.on('close', () => {
-      if (this.HTTP2SessionCache.get(SessionKey) === Session) {
-        this.HTTP2SessionCache.delete(SessionKey)
-      }
-    })
-
-    Session.on('error', () => {
-      if (Session.closed || Session.destroyed) {
-        this.HTTP2SessionCache.delete(SessionKey)
-      }
-    })
-
-    Session.on('goaway', () => {
-      this.HTTP2SessionCache.delete(SessionKey)
-    })
-
+    this.ConfigureHTTP2Session(SessionKey, Session)
     this.HTTP2SessionCache.set(SessionKey, Session)
-    return Session
+
+    const SessionPromise = new Promise<HTTP2.ClientHttp2Session>((Resolve, Reject) => {
+      const Cleanup = () => {
+        Session.off('connect', HandleConnect)
+        Session.off('error', HandleError)
+        Session.off('close', HandleClose)
+      }
+
+      const HandleConnect = () => {
+        Cleanup()
+        this.PendingHTTP2SessionCache.delete(SessionKey)
+        Resolve(Session)
+      }
+
+      const HandleError = (Cause: unknown) => {
+        Cleanup()
+        this.PendingHTTP2SessionCache.delete(SessionKey)
+        this.InvalidateHTTP2Session(Url, Options, Session)
+        Reject(ToError(Cause))
+      }
+
+      const HandleClose = () => {
+        Cleanup()
+        this.PendingHTTP2SessionCache.delete(SessionKey)
+        Reject(new Error('HTTP/2 session closed before it became ready'))
+      }
+
+      Session.once('connect', HandleConnect)
+      Session.once('error', HandleError)
+      Session.once('close', HandleClose)
+    })
+
+    this.PendingHTTP2SessionCache.set(SessionKey, SessionPromise)
+    return await SessionPromise
   }
 
   private GetHTTP2SessionKey(Url: URL, Options: HTTPSRequestOptions): string {
@@ -412,6 +510,7 @@ export class SecureReq {
     const SessionKey = this.GetHTTP2SessionKey(Url, Options)
     const SessionToClose = Session ?? this.HTTP2SessionCache.get(SessionKey)
 
+    this.PendingHTTP2SessionCache.delete(SessionKey)
     this.HTTP2SessionCache.delete(SessionKey)
 
     if (SessionToClose && SessionToClose.closed === false && SessionToClose.destroyed === false) {
@@ -510,14 +609,14 @@ export class SecureReq {
     RequestedCompressions: HTTPCompressionAlgorithm[],
   ): void {
     const Origin = GetOriginKey(Url)
-    const ExistingCapabilities = this.OriginCapabilityCache.get(Origin)
+    const ExistingCapabilities = this.GetCachedOriginCapabilities(Origin)
     const NegotiatedCompressions = this.ResolveNegotiatedCompressions(Headers, RequestedCompressions)
     const HTTP3Advertised = this.IsHTTP3Advertised(Headers)
 
-    this.OriginCapabilityCache.set(Origin, {
+    this.SetOriginCapabilities({
       Origin,
       ProbeCompleted: true,
-      PreferredProtocol: Url.protocol === 'https:' ? (HTTP3Advertised ? 'http/3' : 'http/2') : 'http/1.1',
+      PreferredProtocol: Url.protocol === 'https:' ? 'http/2' : 'http/1.1',
       SupportedCompressions: NegotiatedCompressions.length > 0
         ? NegotiatedCompressions
         : [...(ExistingCapabilities?.SupportedCompressions ?? RequestedCompressions)],
@@ -549,14 +648,158 @@ export class SecureReq {
 
   private MarkOriginAsHTTP1Only(Url: URL): void {
     const Origin = GetOriginKey(Url)
-    const ExistingCapabilities = this.OriginCapabilityCache.get(Origin)
+    const ExistingCapabilities = this.GetCachedOriginCapabilities(Origin)
 
-    this.OriginCapabilityCache.set(Origin, {
+    this.SetOriginCapabilities({
       Origin,
       ProbeCompleted: true,
       PreferredProtocol: 'http/1.1',
       SupportedCompressions: [...(ExistingCapabilities?.SupportedCompressions ?? this.SupportedCompressions)],
       HTTP3Advertised: ExistingCapabilities?.HTTP3Advertised ?? false,
     })
+  }
+
+  private GetCachedOriginCapabilities(UrlOrOrigin: URL | string): OriginCapabilities | undefined {
+    const Origin = typeof UrlOrOrigin === 'string' ? UrlOrOrigin : GetOriginKey(UrlOrOrigin)
+    const Capabilities = this.OriginCapabilityCache.get(Origin)
+
+    if (Capabilities === undefined) {
+      return undefined
+    }
+
+    this.OriginCapabilityCache.delete(Origin)
+    this.OriginCapabilityCache.set(Origin, Capabilities)
+    return Capabilities
+  }
+
+  private SetOriginCapabilities(Capabilities: OriginCapabilities): void {
+    if (this.OriginCapabilityCache.has(Capabilities.Origin)) {
+      this.OriginCapabilityCache.delete(Capabilities.Origin)
+    }
+
+    this.OriginCapabilityCache.set(Capabilities.Origin, Capabilities)
+
+    while (this.OriginCapabilityCache.size > this.OriginCapabilityCacheLimit) {
+      const OldestOrigin = this.OriginCapabilityCache.keys().next().value
+
+      if (OldestOrigin === undefined) {
+        break
+      }
+
+      this.OriginCapabilityCache.delete(OldestOrigin)
+    }
+  }
+
+  private ConfigureHTTP2Session(SessionKey: string, Session: HTTP2.ClientHttp2Session): void {
+    Session.setTimeout(this.HTTP2SessionIdleTimeout, () => {
+      Session.close()
+    })
+
+    if (typeof Session.unref === 'function') {
+      Session.unref()
+    }
+
+    Session.on('close', () => {
+      if (this.HTTP2SessionCache.get(SessionKey) === Session) {
+        this.HTTP2SessionCache.delete(SessionKey)
+      }
+
+      this.PendingHTTP2SessionCache.delete(SessionKey)
+    })
+
+    Session.on('error', () => {
+      if (Session.closed || Session.destroyed) {
+        this.HTTP2SessionCache.delete(SessionKey)
+        this.PendingHTTP2SessionCache.delete(SessionKey)
+      }
+    })
+
+    Session.on('goaway', () => {
+      this.HTTP2SessionCache.delete(SessionKey)
+      this.PendingHTTP2SessionCache.delete(SessionKey)
+    })
+  }
+
+  private AttachRequestCancellation(
+    Options: HTTPSRequestOptions,
+    Cancel: (Cause: Error) => void,
+  ): () => void {
+    const CleanupCallbacks: Array<() => void> = []
+
+    if (Options.TimeoutMs !== undefined) {
+      const Timer = setTimeout(() => {
+        Cancel(this.CreateTimeoutError(Options.TimeoutMs ?? 0))
+      }, Options.TimeoutMs)
+
+      if (typeof Timer.unref === 'function') {
+        Timer.unref()
+      }
+
+      CleanupCallbacks.push(() => {
+        clearTimeout(Timer)
+      })
+    }
+
+    if (Options.Signal) {
+      const Signal = Options.Signal
+      const HandleAbort = () => {
+        Cancel(this.CreateAbortError(Signal.reason))
+      }
+
+      if (Signal.aborted) {
+        queueMicrotask(HandleAbort)
+      } else {
+        Signal.addEventListener('abort', HandleAbort, { once: true })
+        CleanupCallbacks.push(() => {
+          Signal.removeEventListener('abort', HandleAbort)
+        })
+      }
+    }
+
+    return () => {
+      for (const Cleanup of CleanupCallbacks.splice(0)) {
+        Cleanup()
+      }
+    }
+  }
+
+  private BindRequestCleanupToResponseStream(Stream: ExpectedAsMap['Stream'], Cleanup: () => void): void {
+    if (Stream.destroyed || Stream.readableEnded) {
+      Cleanup()
+      return
+    }
+
+    let CleanedUp = false
+
+    const CleanupOnce = () => {
+      if (CleanedUp) {
+        return
+      }
+
+      CleanedUp = true
+      Stream.off('close', CleanupOnce)
+      Stream.off('end', CleanupOnce)
+      Stream.off('error', CleanupOnce)
+      Cleanup()
+    }
+
+    Stream.once('close', CleanupOnce)
+    Stream.once('end', CleanupOnce)
+    Stream.once('error', CleanupOnce)
+  }
+
+  private CreateAbortError(Cause?: unknown): Error {
+    const RequestError = Cause === undefined
+      ? new Error('Request was aborted')
+      : new Error('Request was aborted', { cause: Cause })
+
+    RequestError.name = 'AbortError'
+    return RequestError
+  }
+
+  private CreateTimeoutError(TimeoutMs: number): Error {
+    const RequestError = new Error(`Request timed out after ${TimeoutMs}ms`)
+    RequestError.name = 'TimeoutError'
+    return RequestError
   }
 }

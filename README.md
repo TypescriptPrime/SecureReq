@@ -70,6 +70,7 @@ for await (const chunk of streamed.Body) {
   - `Accept-Encoding: zstd, gzip, deflate`
   - later requests narrow `Accept-Encoding` based on observed response headers and prefer `http/2`
 - `Close()` closes cached http/2 sessions.
+- `OriginCapabilityCacheLimit` bounds remembered origin capability entries with LRU-style eviction.
 
 ### `client.Request(Url, Options?)`
 
@@ -95,6 +96,8 @@ Fields:
 - `PreferredProtocol?: 'auto'|'http/1.1'|'http/2'|'http/3'`
   - `http/3` is currently a placeholder branch and falls back to `http/2`.
 - `EnableCompression?: boolean` — Enables automatic `Accept-Encoding` negotiation and transparent response decompression.
+- `TimeoutMs?: number` — Aborts the request if headers or body transfer exceed the given number of milliseconds.
+- `Signal?: AbortSignal` — Cancels the request using a standard abort signal.
 
 ### HTTPSResponse
 
@@ -104,6 +107,7 @@ Notes:
 - If `ExpectedAs` is omitted, a heuristic is used: `.json` → `JSON`, `.txt` → `String`, otherwise `ArrayBuffer`.
 - When `ExpectedAs` is `JSON`, the body is parsed and an error is thrown if parsing fails.
 - When `ExpectedAs` is `Stream`, the body is returned as a Node.js readable stream.
+- Redirects are not followed automatically; `3xx` responses are returned as-is.
 
 ---
 
@@ -113,6 +117,7 @@ Notes:
 - TLS options are forwarded to Node's HTTPS or http/2 TLS layer (`minVersion`, `maxVersion`, `ciphers`, `ecdhCurve`).
 - The library uses `zod` for runtime validation of options.
 - Compression negotiation is origin-scoped. Subdomains are tracked independently.
+- `GetOriginCapabilities().PreferredProtocol` reflects the currently usable transport (`http/1.1` or `http/2`), while `HTTP3Advertised` records whether the origin advertised `h3`.
 - http/3 advertisement points are recorded from response headers, but Node.js built-in http/3 transport is not yet used.
 
 ---

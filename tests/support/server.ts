@@ -128,16 +128,44 @@ export async function StartTestServer(): Promise<TestServer> {
           break
         }
 
+        case '/slow-headers': {
+          setTimeout(() => {
+            if (Response.writableEnded) {
+              return
+            }
+
+            Response.statusCode = 200
+            Response.setHeader('content-type', 'text/plain; charset=utf-8')
+            Response.end(Buffer.from('slow-headers'))
+          }, 75)
+          break
+        }
+
+        case '/slow-stream': {
+          Response.statusCode = 200
+          Response.setHeader('content-type', 'text/plain; charset=utf-8')
+          Response.write(Buffer.from('slow-'))
+
+          setTimeout(() => {
+            if (Response.writableEnded) {
+              return
+            }
+
+            Response.end(Buffer.from('stream'))
+          }, 75)
+          break
+        }
+
         default: {
           Response.statusCode = 404
           Response.setHeader('content-type', 'text/plain; charset=utf-8')
           Response.end(Buffer.from('not-found'))
         }
       }
-    })().catch(Error => {
+    })().catch(Cause => {
       Response.statusCode = 500
       Response.setHeader('content-type', 'text/plain; charset=utf-8')
-      Response.end(Buffer.from(String(Error)))
+      Response.end(Buffer.from(String(Cause)))
     })
   })
 
@@ -157,9 +185,9 @@ export async function StartTestServer(): Promise<TestServer> {
       Server.once('listening', HandleListening)
       Server.listen(0, '127.0.0.1')
     })
-  } catch (Error) {
+  } catch (Cause) {
     await TLSCertificate.Cleanup()
-    throw Error
+    throw Cause
   }
 
   const Address = Server.address()
