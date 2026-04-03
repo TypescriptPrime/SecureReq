@@ -43,7 +43,7 @@ interface FinalizeResponseContext<E extends ExpectedAsKey> {
   Url: URL,
   Options: HTTPSRequestOptions<E>,
   ExpectedAs: E,
-  Protocol: 'HTTP/1.1' | 'HTTP/2',
+  Protocol: 'http/1.1' | 'http/2',
   StatusCode: number,
   Headers: Record<string, string | string[] | undefined>,
   ResponseStream: Readable,
@@ -92,15 +92,15 @@ export class SecureReq {
     const Protocol = this.ResolveTransportProtocol(Url, MergedOptions)
 
     try {
-      if (Protocol === 'HTTP/2') {
+      if (Protocol === 'http/2') {
         return await this.RequestWithHTTP2(Url, MergedOptions, ExpectedAs)
       }
 
       return await this.RequestWithHTTP1(Url, MergedOptions, ExpectedAs)
     } catch (Error) {
-      const FallbackAllowed = Protocol === 'HTTP/2'
-        && MergedOptions.PreferredProtocol !== 'HTTP/2'
-        && MergedOptions.PreferredProtocol !== 'HTTP/3'
+      const FallbackAllowed = Protocol === 'http/2'
+        && MergedOptions.PreferredProtocol !== 'http/2'
+        && MergedOptions.PreferredProtocol !== 'http/3'
         && IsStreamingPayload(MergedOptions.Payload) === false
 
       if (FallbackAllowed) {
@@ -162,8 +162,8 @@ export class SecureReq {
       throw new Error('HTTPS is enforced, but the URL protocol is not HTTPS')
     }
 
-    if ((Options.PreferredProtocol === 'HTTP/2' || Options.PreferredProtocol === 'HTTP/3') && Url.protocol !== 'https:') {
-      throw new Error('HTTP/2 and HTTP/3 negotiation require an HTTPS URL')
+    if ((Options.PreferredProtocol === 'http/2' || Options.PreferredProtocol === 'http/3') && Url.protocol !== 'https:') {
+      throw new Error('http/2 and http/3 negotiation require an HTTPS URL')
     }
 
     if (Options.Payload !== undefined && PayloadEnabledMethods.has(Options.HttpMethod ?? 'GET') === false) {
@@ -171,32 +171,32 @@ export class SecureReq {
     }
   }
 
-  private ResolveTransportProtocol(Url: URL, Options: HTTPSRequestOptions): 'HTTP/1.1' | 'HTTP/2' {
+  private ResolveTransportProtocol(Url: URL, Options: HTTPSRequestOptions): 'http/1.1' | 'http/2' {
     if (Url.protocol !== 'https:') {
-      return 'HTTP/1.1'
+      return 'http/1.1'
     }
 
     switch (Options.PreferredProtocol) {
-      case 'HTTP/1.1':
-        return 'HTTP/1.1'
-      case 'HTTP/2':
-        return 'HTTP/2'
-      case 'HTTP/3':
-        return 'HTTP/2'
+      case 'http/1.1':
+        return 'http/1.1'
+      case 'http/2':
+        return 'http/2'
+      case 'http/3':
+        return 'http/2'
       default:
         break
     }
 
     const OriginCapabilities = this.OriginCapabilityCache.get(GetOriginKey(Url))
     if (OriginCapabilities?.ProbeCompleted !== true) {
-      return 'HTTP/1.1'
+      return 'http/1.1'
     }
 
-    if (OriginCapabilities.PreferredProtocol === 'HTTP/1.1') {
-      return 'HTTP/1.1'
+    if (OriginCapabilities.PreferredProtocol === 'http/1.1') {
+      return 'http/1.1'
     }
 
-    return 'HTTP/2'
+    return 'http/2'
   }
 
   private BuildRequestHeaders(Url: URL, Options: HTTPSRequestOptions): {
@@ -256,7 +256,7 @@ export class SecureReq {
           Url,
           Options,
           ExpectedAs,
-          Protocol: 'HTTP/1.1',
+          Protocol: 'http/1.1',
           StatusCode: Response.statusCode ?? 0,
           Headers: NormalizeIncomingHeaders(Response.headers as Record<string, unknown>),
           ResponseStream: Response,
@@ -337,7 +337,7 @@ export class SecureReq {
           Url,
           Options,
           ExpectedAs,
-          Protocol: 'HTTP/2',
+          Protocol: 'http/2',
           StatusCode: Number(ResponseHeaders[':status'] ?? 0),
           Headers: NormalizeIncomingHeaders(ResponseHeaders as Record<string, unknown>),
           ResponseStream: Request,
@@ -372,7 +372,7 @@ export class SecureReq {
         ciphers: Options.TLS?.Ciphers?.join(':'),
         ecdhCurve: Options.TLS?.KeyExchanges?.join(':'),
         rejectUnauthorized: Options.TLS?.RejectUnauthorized,
-        ALPNProtocols: ['h2', 'HTTP/1.1'],
+        ALPNProtocols: ['h2', 'http/1.1'],
       }),
     })
 
@@ -517,7 +517,7 @@ export class SecureReq {
     this.OriginCapabilityCache.set(Origin, {
       Origin,
       ProbeCompleted: true,
-      PreferredProtocol: Url.protocol === 'https:' ? (HTTP3Advertised ? 'HTTP/3' : 'HTTP/2') : 'HTTP/1.1',
+      PreferredProtocol: Url.protocol === 'https:' ? (HTTP3Advertised ? 'http/3' : 'http/2') : 'http/1.1',
       SupportedCompressions: NegotiatedCompressions.length > 0
         ? NegotiatedCompressions
         : [...(ExistingCapabilities?.SupportedCompressions ?? RequestedCompressions)],
@@ -554,7 +554,7 @@ export class SecureReq {
     this.OriginCapabilityCache.set(Origin, {
       Origin,
       ProbeCompleted: true,
-      PreferredProtocol: 'HTTP/1.1',
+      PreferredProtocol: 'http/1.1',
       SupportedCompressions: [...(ExistingCapabilities?.SupportedCompressions ?? this.SupportedCompressions)],
       HTTP3Advertised: ExistingCapabilities?.HTTP3Advertised ?? false,
     })

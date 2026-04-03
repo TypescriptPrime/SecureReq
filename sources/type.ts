@@ -1,7 +1,7 @@
 import type { Readable } from 'node:stream'
 
 export type HTTPCompressionAlgorithm = 'zstd' | 'gzip' | 'deflate'
-export type HTTPProtocol = 'HTTP/1.1' | 'HTTP/2' | 'HTTP/3'
+export type HTTPProtocol = 'http/1.1' | 'http/2' | 'http/3'
 export type HTTPMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'HEAD' | 'OPTIONS'
 export type HTTPProtocolPreference = 'auto' | HTTPProtocol
 
@@ -38,7 +38,7 @@ export interface HTTPSResponse<T = unknown> {
   StatusCode: number,
   Headers: Record<string, string | string[] | undefined>,
   Body: T,
-  Protocol: 'HTTP/1.1' | 'HTTP/2',
+  Protocol: 'http/1.1' | 'http/2',
   ContentEncoding: HTTPCompressionAlgorithm | 'identity',
   DecodedBody: boolean
 }

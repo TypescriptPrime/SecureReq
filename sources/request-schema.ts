@@ -25,6 +25,6 @@ export const RequestOptionsSchema = Zod.strictObject({
     }),
   ]).optional(),
   ExpectedAs: Zod.enum(['JSON', 'String', 'ArrayBuffer', 'Stream']).optional(),
-  PreferredProtocol: Zod.enum(['auto', 'HTTP/1.1', 'HTTP/2', 'HTTP/3']).optional(),
+  PreferredProtocol: Zod.enum(['auto', 'http/1.1', 'http/2', 'http/3']).optional(),
   EnableCompression: Zod.boolean().optional(),
 })

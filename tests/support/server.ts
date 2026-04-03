@@ -71,7 +71,7 @@ export async function StartTestServer(): Promise<TestServer> {
       const AcceptEncoding = Array.isArray(Request.headers['accept-encoding'])
         ? Request.headers['accept-encoding'].join(', ')
         : Request.headers['accept-encoding'] ?? ''
-      const Protocol = Request.httpVersion === '2.0' ? 'HTTP/2' : 'HTTP/1.1'
+      const Protocol = Request.httpVersion === '2.0' ? 'http/2' : 'http/1.1'
 
       switch (RequestUrl.pathname) {
         case '/negotiate': {

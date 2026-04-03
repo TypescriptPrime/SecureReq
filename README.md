@@ -1,12 +1,12 @@
 # SecureReq 🔐
 
-**SecureReq** is a lightweight TypeScript utility for secure HTTP requests with strict TLS defaults, automatic HTTP/1.1 to HTTP/2 negotiation, streaming I/O, and typed response parsing.
+**SecureReq** is a lightweight TypeScript utility for secure HTTP requests with strict TLS defaults, automatic http/1.1 to http/2 negotiation, streaming I/O, and typed response parsing.
 
 ---
 
 ## 🚀 Quick Summary
 
-- **Class-first** API that probes each origin with `HTTP/1.1` first, then upgrades future requests to `HTTP/2` when appropriate.
+- **Class-first** API that probes each origin with `http/1.1` first, then upgrades future requests to `http/2` when appropriate.
 - Supports **response compression** with `zstd`, `gzip`, and `deflate`.
 - Supports **streaming uploads and streaming downloads**.
 - Defaults to **TLSv1.3**, Post Quantum Cryptography key exchange, a limited set of strongest ciphers, and a `User-Agent` header.
@@ -33,18 +33,18 @@ import { SecureReq } from '@typescriptprime/securereq'
 
 const client = new SecureReq()
 
-// First request to an origin uses HTTP/1.1 probing.
+// First request to an origin uses http/1.1 probing.
 const first = await client.Request(new URL('https://api64.ipify.org?format=json'), {
   ExpectedAs: 'JSON',
 })
 
-// Later requests to the same origin can move to HTTP/2 automatically.
+// Later requests to the same origin can move to http/2 automatically.
 const second = await client.Request(new URL('https://api64.ipify.org?format=json'), {
   ExpectedAs: 'JSON',
 })
 
-console.log(first.Protocol) // 'HTTP/1.1'
-console.log(second.Protocol) // 'HTTP/2' when available
+console.log(first.Protocol) // 'http/1.1'
+console.log(second.Protocol) // 'http/2' when available
 
 // Stream upload + stream download
 const streamed = await client.Request(new URL('https://example.com/upload'), {
@@ -66,10 +66,10 @@ for await (const chunk of streamed.Body) {
 
 - Recommended entry point.
 - Keeps per-origin capability state:
-  - first request is sent with `HTTP/1.1`
+  - first request is sent with `http/1.1`
   - `Accept-Encoding: zstd, gzip, deflate`
-  - later requests narrow `Accept-Encoding` based on observed response headers and prefer `HTTP/2`
-- `Close()` closes cached HTTP/2 sessions.
+  - later requests narrow `Accept-Encoding` based on observed response headers and prefer `http/2`
+- `Close()` closes cached http/2 sessions.
 
 ### `client.Request(Url, Options?)`
 
@@ -92,13 +92,13 @@ Fields:
 - `HttpMethod?: 'GET'|'POST'|'PUT'|'DELETE'|'PATCH'|'HEAD'|'OPTIONS'`
 - `Payload?: string | ArrayBuffer | Uint8Array | Readable | AsyncIterable`
 - `ExpectedAs?: 'JSON'|'String'|'ArrayBuffer'|'Stream'` — How to parse the response body.
-- `PreferredProtocol?: 'auto'|'HTTP/1.1'|'HTTP/2'|'HTTP/3'`
-  - `HTTP/3` is currently a placeholder branch and falls back to `HTTP/2`.
+- `PreferredProtocol?: 'auto'|'http/1.1'|'http/2'|'http/3'`
+  - `http/3` is currently a placeholder branch and falls back to `http/2`.
 - `EnableCompression?: boolean` — Enables automatic `Accept-Encoding` negotiation and transparent response decompression.
 
 ### HTTPSResponse
 
-- `{ StatusCode: number, Headers: Record<string,string|string[]|undefined>, Body: T, Protocol: 'HTTP/1.1'|'HTTP/2', ContentEncoding: 'identity'|'zstd'|'gzip'|'deflate', DecodedBody: boolean }`
+- `{ StatusCode: number, Headers: Record<string,string|string[]|undefined>, Body: T, Protocol: 'http/1.1'|'http/2', ContentEncoding: 'identity'|'zstd'|'gzip'|'deflate', DecodedBody: boolean }`
 
 Notes:
 - If `ExpectedAs` is omitted, a heuristic is used: `.json` → `JSON`, `.txt` → `String`, otherwise `ArrayBuffer`.
@@ -110,10 +110,10 @@ Notes:
 ## Security & Behavior Notes 🔐
 
 - Strict TLS defaults lean on **TLSv1.3** and a reduced cipher list to encourage secure transport out of the box.
-- TLS options are forwarded to Node's HTTPS or HTTP/2 TLS layer (`minVersion`, `maxVersion`, `ciphers`, `ecdhCurve`).
+- TLS options are forwarded to Node's HTTPS or http/2 TLS layer (`minVersion`, `maxVersion`, `ciphers`, `ecdhCurve`).
 - The library uses `zod` for runtime validation of options.
 - Compression negotiation is origin-scoped. Subdomains are tracked independently.
-- HTTP/3 advertisement points are recorded from response headers, but Node.js built-in HTTP/3 transport is not yet used.
+- http/3 advertisement points are recorded from response headers, but Node.js built-in http/3 transport is not yet used.
 
 ---
 
