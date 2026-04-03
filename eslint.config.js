@@ -17,7 +17,7 @@ const config = [
       "quotes": ["error", "single"],  
       "@typescript-eslint/no-unused-vars": "warn",
       '@typescript-eslint/naming-convention': ['error', {
-			selector: ['variableLike', 'parameterProperty', 'classProperty', 'typeProperty'],
+			selector: ['variableLike', 'parameterProperty', 'classProperty', 'typeProperty', 'classMethod'],
 			format: ['PascalCase']
 		  }]
     }
