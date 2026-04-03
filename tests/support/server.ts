@@ -12,6 +12,7 @@ type TestNodeServer = HTTPS.Server | HTTP2.Http2SecureServer
 export interface TestServer {
   BaseUrl: string,
   GetRequestCount: (Path: string) => number,
+  GetSecureConnectionCount: () => number,
   Close: () => Promise<void>
 }
 
@@ -216,6 +217,11 @@ async function StartServer(
   TLSCleanup: () => Promise<void>,
 ): Promise<TestServer> {
   let IsClosed = false
+  let SecureConnectionCount = 0
+
+  Server.on('secureConnection', () => {
+    SecureConnectionCount += 1
+  })
 
   try {
     await new Promise<void>((Resolve, Reject) => {
@@ -247,6 +253,7 @@ async function StartServer(
   return {
     BaseUrl: `https://localhost:${Address.port}`,
     GetRequestCount: Path => RequestCounts.get(Path) ?? 0,
+    GetSecureConnectionCount: () => SecureConnectionCount,
     Close: async () => {
       if (IsClosed) {
         return
