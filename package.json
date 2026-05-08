@@ -51,11 +51,11 @@
     "url": "git+https://github.com/TypescriptPrime/SecureReq.git"
   },
   "devDependencies": {
-    "@ava/typescript": "^6.0.0",
+    "@ava/typescript": "^7.0.0",
     "@types/node": "^24.12.3",
     "@typescript-eslint/eslint-plugin": "^8.59.2",
     "@typescript-eslint/parser": "^8.59.2",
-    "ava": "^7.0.0",
+    "ava": "^8.0.0",
     "eslint": "^10.3.0",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3",
