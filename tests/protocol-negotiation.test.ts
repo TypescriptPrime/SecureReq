@@ -1,7 +1,39 @@
+import { execFile } from 'node:child_process'
+import * as Process from 'node:process'
 import { Readable } from 'node:stream'
 import test from 'ava'
 import { ReadStreamAsString, StartHTTP1OnlyTestServer, StartTestServer } from './support/server.js'
 import { CreateTestClient } from './support/client.js'
+
+interface ChildProcessResult {
+  ExitCode: number | null,
+  Stdout: string,
+  Stderr: string
+}
+
+async function RunNodeCLI(Arguments: string[]): Promise<ChildProcessResult> {
+  return await new Promise<ChildProcessResult>((Resolve, Reject) => {
+    const Child = execFile(Process.execPath, Arguments, {
+      cwd: new URL('..', import.meta.url),
+      env: Process.env,
+    }, (Error, Stdout, Stderr) => {
+      if (Error && typeof Error !== 'object') {
+        Reject(Error)
+        return
+      }
+
+      Resolve({
+        ExitCode: typeof Error === 'object' && Error !== null && 'code' in Error && typeof Error.code === 'number'
+          ? Error.code
+          : 0,
+        Stdout,
+        Stderr,
+      })
+    })
+
+    Child.on('error', Reject)
+  })
+}
 
 test('SecureReq probes with http/1.1 then upgrades to http/2 with negotiated compression state', async T => {
   const TestServer = await StartTestServer()
@@ -81,6 +113,46 @@ test('SecureReq supports explicit protocol preferences without legacy wrappers',
 
   T.is(HTTP2Response.Protocol, 'http/2')
   T.is(HTTP2Response.Body, 'plain:http/2')
+})
+
+test('SecureReq keeps top-level await alive for active HTTP/2 requests', async T => {
+  const TestServer = await StartTestServer()
+
+  T.teardown(async () => {
+    await TestServer.Close()
+  })
+
+  const Result = await RunNodeCLI([
+    '--import=tsx',
+    '--input-type=module',
+    '--eval',
+    `
+import { SecureReq } from './sources/index.ts'
+
+const Client = new SecureReq({
+  DefaultOptions: {
+    PreferredProtocol: 'http/2',
+    TLS: {
+      RejectUnauthorized: false,
+    },
+  },
+})
+
+try {
+  const Response = await Client.Request(new URL('/slow-headers', '${TestServer.BaseUrl}'), {
+    ExpectedAs: 'String',
+  })
+
+  console.log(\`\${Response.Protocol}:\${Response.Body}\`)
+} finally {
+  Client.Close()
+}
+`,
+  ])
+
+  T.is(Result.ExitCode, 0, Result.Stderr)
+  T.is(Result.Stdout.trim(), 'http/2:slow-headers')
+  T.is(Result.Stderr.trim(), '')
 })
 
 test('SecureReq safely falls back to http/1.1 after automatic HTTP/2 negotiation failure for GET', async T => {

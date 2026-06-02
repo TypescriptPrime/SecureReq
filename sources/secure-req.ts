@@ -73,6 +73,7 @@ export class SecureReq {
   private readonly OriginCapabilityCache = new Map<string, CachedOriginCapabilities>()
   private readonly HTTP2SessionCache = new Map<string, HTTP2.ClientHttp2Session>()
   private readonly PendingHTTP2SessionCache = new Map<string, Promise<HTTP2.ClientHttp2Session>>()
+  private readonly HTTP2SessionRefCounts = new WeakMap<HTTP2.ClientHttp2Session, number>()
 
   public constructor(Options: SecureReqOptions = {}) {
     const ParsedOptions = SecureReqOptionsSchema.parse(Options)
@@ -432,6 +433,7 @@ export class SecureReq {
   ): Promise<HTTPSResponse<AutoDetectedResponseBody | ExpectedAsMap[E]>> {
     const { Headers, RequestedCompressions } = this.BuildRequestHeaders(Url, Options)
     const Session = await this.GetOrCreateHTTP2Session(Url, Options, PreconnectedSocket)
+    const ReleaseSessionRef = this.RefHTTP2Session(Session)
     let Request: HTTP2.ClientHttp2Stream
 
     try {
@@ -443,12 +445,17 @@ export class SecureReq {
         ...this.FilterHTTP2Headers(Headers),
       })
     } catch (Cause) {
+      ReleaseSessionRef()
       throw new HTTP2NegotiationError('Failed to start HTTP/2 request', { cause: Cause })
     }
 
     return await new Promise<HTTPSResponse<ExpectedAsMap[E]>>((Resolve, Reject) => {
       let Settled = false
       let CleanupCancellation = () => {}
+      const CleanupActiveRequest = () => {
+        CleanupCancellation()
+        ReleaseSessionRef()
+      }
       const CancellationTarget: { Cancel: (Cause: Error) => void } = {
         Cancel: Cause => {
           void Cause
@@ -465,7 +472,7 @@ export class SecureReq {
       const RejectOnce = (Error: unknown) => {
         if (Settled === false) {
           Settled = true
-          CleanupCancellation()
+          CleanupActiveRequest()
           this.InvalidateHTTP2Session(Url, Options, Session)
           Reject(this.EnhanceTransportError(Error, Options))
         }
@@ -476,7 +483,7 @@ export class SecureReq {
         const StatusCode = Number(ResponseHeaders[':status'] ?? 0)
 
         if (this.ShouldFollowRedirect(StatusCode, NormalizedHeaders, Options)) {
-          CleanupCancellation()
+          CleanupActiveRequest()
           this.UpdateOriginCapabilities(Url, 'http/2', NormalizedHeaders, RequestedCompressions)
           this.DiscardResponseStream(Request)
           void this.FollowRedirect(Url, Options, StatusCode, NormalizedHeaders, RedirectCount)
@@ -509,12 +516,12 @@ export class SecureReq {
               RejectOnce(Cause)
             }
 
-            this.BindRequestCleanupToResponseStream(ResponseBody, CleanupCancellation)
+            this.BindRequestCleanupToResponseStream(ResponseBody, CleanupActiveRequest)
             ResolveOnce(ResponseValue)
             return
           }
 
-          CleanupCancellation()
+          CleanupActiveRequest()
           ResolveOnce(ResponseValue)
         }, RejectOnce)
       })
@@ -575,6 +582,7 @@ export class SecureReq {
 
       this.ConfigureHTTP2Session(SessionKey, Session)
       this.HTTP2SessionCache.set(SessionKey, Session)
+      const ReleaseSessionRef = this.RefHTTP2Session(Session)
 
       return await new Promise<HTTP2.ClientHttp2Session>((Resolve, Reject) => {
         let Connected = false
@@ -583,6 +591,7 @@ export class SecureReq {
           Session.off('connect', HandleConnect)
           Session.off('error', HandleError)
           Session.off('close', HandleClose)
+          ReleaseSessionRef()
         }
 
         const HandleConnect = () => {
@@ -851,6 +860,38 @@ export class SecureReq {
       this.HTTP2SessionCache.delete(SessionKey)
       this.PendingHTTP2SessionCache.delete(SessionKey)
     })
+  }
+
+  private RefHTTP2Session(Session: HTTP2.ClientHttp2Session): () => void {
+    let Released = false
+    const RefCount = this.HTTP2SessionRefCounts.get(Session) ?? 0
+
+    this.HTTP2SessionRefCounts.set(Session, RefCount + 1)
+
+    if (typeof Session.ref === 'function') {
+      Session.ref()
+    }
+
+    return () => {
+      if (Released) {
+        return
+      }
+
+      Released = true
+
+      const CurrentRefCount = this.HTTP2SessionRefCounts.get(Session) ?? 0
+      if (CurrentRefCount <= 1) {
+        this.HTTP2SessionRefCounts.delete(Session)
+
+        if (Session.closed === false && Session.destroyed === false && typeof Session.unref === 'function') {
+          Session.unref()
+        }
+
+        return
+      }
+
+      this.HTTP2SessionRefCounts.set(Session, CurrentRefCount - 1)
+    }
   }
 
   private EnhanceTransportError(Cause: unknown, Options: HTTPSRequestOptions): Error {
