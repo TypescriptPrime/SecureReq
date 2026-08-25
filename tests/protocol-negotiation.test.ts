@@ -17,8 +17,8 @@ async function RunNodeCLI(Arguments: string[]): Promise<ChildProcessResult> {
       cwd: new URL('..', import.meta.url),
       env: Process.env,
     }, (Error, Stdout, Stderr) => {
-      if (Error && typeof Error !== 'object') {
-        Reject(Error)
+      if (Error && typeof Error.code !== 'number') {
+        Reject(Error as Error)
         return
       }
 

@@ -105,7 +105,7 @@ export class SecureReq {
   public async Request(Url: URL): Promise<HTTPSResponse<AutoDetectedResponseBody>>
   public async Request(Url: URL, Options: Omit<HTTPSRequestOptions, 'ExpectedAs'> & { ExpectedAs?: undefined }): Promise<HTTPSResponse<AutoDetectedResponseBody>>
   public async Request<E extends ExpectedAsKey>(Url: URL, Options: HTTPSRequestOptions<E> & { ExpectedAs: E }): Promise<HTTPSResponse<ExpectedAsMap[E]>>
-  public async Request<E extends ExpectedAsKey>(Url: URL, Options?: HTTPSRequestOptions<E>): Promise<HTTPSResponse<AutoDetectedResponseBody | ExpectedAsMap[E]>> {
+  public async Request<E extends ExpectedAsKey>(Url: URL, Options?: HTTPSRequestOptions<E>): Promise<HTTPSResponse<AutoDetectedResponseBody>> {
     return await this.RequestInternal(Url, Options, 0)
   }
 
@@ -113,7 +113,7 @@ export class SecureReq {
     Url: URL,
     Options: HTTPSRequestOptions<E> | undefined,
     RedirectCount: number,
-  ): Promise<HTTPSResponse<AutoDetectedResponseBody | ExpectedAsMap[E]>> {
+  ): Promise<HTTPSResponse<AutoDetectedResponseBody>> {
     if (Url instanceof URL === false) {
       throw new TypeError('Url must be an instance of URL')
     }
@@ -289,7 +289,7 @@ export class SecureReq {
     ExpectedAs: E,
     RedirectCount: number,
     PreconnectedSocket?: TLS.TLSSocket,
-  ): Promise<HTTPSResponse<AutoDetectedResponseBody | ExpectedAsMap[E]>> {
+  ): Promise<HTTPSResponse<AutoDetectedResponseBody>> {
     const { Headers, RequestedCompressions } = this.BuildRequestHeaders(Url, Options)
 
     return await new Promise<HTTPSResponse<ExpectedAsMap[E]>>((Resolve, Reject) => {
@@ -430,7 +430,7 @@ export class SecureReq {
     ExpectedAs: E,
     RedirectCount: number,
     PreconnectedSocket?: TLS.TLSSocket,
-  ): Promise<HTTPSResponse<AutoDetectedResponseBody | ExpectedAsMap[E]>> {
+  ): Promise<HTTPSResponse<AutoDetectedResponseBody>> {
     const { Headers, RequestedCompressions } = this.BuildRequestHeaders(Url, Options)
     const Session = await this.GetOrCreateHTTP2Session(Url, Options, PreconnectedSocket)
     const ReleaseSessionRef = this.RefHTTP2Session(Session)
@@ -1009,7 +1009,7 @@ export class SecureReq {
     StatusCode: number,
     Headers: Record<string, string | string[] | undefined>,
     RedirectCount: number,
-  ): Promise<HTTPSResponse<AutoDetectedResponseBody | ExpectedAsMap[E]>> {
+  ): Promise<HTTPSResponse<AutoDetectedResponseBody>> {
     const LocationHeader = GetHeaderValue(Headers, 'location')
 
     if (LocationHeader === undefined) {

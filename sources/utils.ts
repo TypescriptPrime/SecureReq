@@ -2,6 +2,11 @@ import { Readable } from 'node:stream'
 import * as ZLib from 'node:zlib'
 import type { HTTPCompressionAlgorithm, HTTPSRequestPayload, HTTPSRequestPayloadChunk, TLSOptions } from './type.js'
 
+// `Array.isArray` narrows to `any[]`, so use an explicit predicate to keep `unknown` element types.
+function IsUnknownArray(Value: unknown): Value is unknown[] {
+  return Array.isArray(Value)
+}
+
 export function ConcatArrayBuffers(Buffers: ArrayBuffer[]): ArrayBuffer {
   const TotalLength = Buffers.reduce((Sum, Block) => Sum + Block.byteLength, 0)
   const Result = new Uint8Array(TotalLength)
@@ -41,16 +46,17 @@ export function NormalizeIncomingHeaders(Headers: Record<string, unknown>): Reco
   return Object.fromEntries(
     Object.entries(Headers)
       .filter(([Key]) => Key.startsWith(':') === false)
-      .map(([Key, Value]) => {
-        if (Array.isArray(Value)) {
-          return [Key.toLowerCase(), Value.map(Item => Item?.toString())]
+      .map(([Key, Value]): [string, string | string[] | undefined] => {
+        if (IsUnknownArray(Value)) {
+          return [Key.toLowerCase(), Value.map(Item => typeof Item === 'string' ? Item : String(Item))]
         }
 
         if (Value === undefined || Value === null) {
           return [Key.toLowerCase(), undefined]
         }
 
-        return [Key.toLowerCase(), Value.toString()]
+        // Node's incoming headers are only ever string, string[], or undefined at runtime.
+        return [Key.toLowerCase(), Value as string]
       }),
   )
 }

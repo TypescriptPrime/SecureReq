@@ -21,7 +21,7 @@ test('SecureReq auto-detects response parsing when ExpectedAs is omitted', async
   T.true(BufferResponse.Body instanceof ArrayBuffer)
 })
 
-test('SecureReq validates constructor options at initialization time', async T => {
+test('SecureReq validates constructor options at initialization time', T => {
   const InvalidCompression = 'brotli' as unknown as 'gzip'
 
   T.throws(() => {
