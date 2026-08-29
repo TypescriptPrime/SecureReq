@@ -1,4 +1,5 @@
 import type { Readable } from 'node:stream'
+import type { Duplex } from 'node:stream'
 
 export type HTTPCompressionAlgorithm = 'zstd' | 'gzip' | 'deflate'
 export type HTTPProtocol = 'http/1.1' | 'http/2' | 'http/3'
@@ -19,6 +20,11 @@ export type HTTPSRequestPayloadChunk = string | ArrayBuffer | Uint8Array
 export type HTTPSRequestPayloadStream = NodeJS.ReadableStream | AsyncIterable<HTTPSRequestPayloadChunk>
 export type HTTPSRequestPayload = HTTPSRequestPayloadChunk | HTTPSRequestPayloadStream
 
+export interface SecureConnectionOptions {
+  Hostname: string,
+  Port: number
+}
+
 export interface HTTPSRequestOptions<E extends ExpectedAsKey = ExpectedAsKey> {
   TLS?: TLSOptions,
   HttpHeaders?: Record<string, string>,
@@ -30,7 +36,9 @@ export interface HTTPSRequestOptions<E extends ExpectedAsKey = ExpectedAsKey> {
   FollowRedirects?: boolean,
   MaxRedirects?: number,
   TimeoutMs?: number,
-  Signal?: AbortSignal
+  Signal?: AbortSignal,
+  Agent?: import('node:http').Agent | import('node:https').Agent,
+  CreateConnection?: (Options: SecureConnectionOptions) => Promise<Duplex> | Duplex
 }
 
 export interface SecureReqOptions {

@@ -32,6 +32,8 @@ Create a client and reuse it per origin:
 
 ```ts
 import { Readable } from 'node:stream'
+import { HttpsProxyAgent } from 'https-proxy-agent'
+import { SocksProxyAgent } from 'socks-proxy-agent'
 import { SecureReq } from '@typescriptprime/securereq'
 
 const client = new SecureReq()
@@ -69,6 +71,20 @@ for await (const chunk of streamed.Body) {
   console.log(chunk)
 }
 ```
+
+Use an external Agent for HTTP CONNECT or SOCKS proxies. SecureReq does not create or close the Agent.
+
+```ts
+const httpProxy = new HttpsProxyAgent('http://proxy.example:8080')
+const socksProxy = new SocksProxyAgent('socks5h://proxy.example:1080')
+
+const proxied = await client.Request(new URL('https://example.com'), {
+  Agent: httpProxy,
+  ExpectedAs: 'String',
+})
+```
+
+An Agent alone uses HTTP/1.1. To use HTTP/2 through a proxy, provide `CreateConnection`, which must asynchronously return an open, unencrypted tunnel to the target host and port. SecureReq applies TLS and ALPN over that socket.
 
 For quick one-off requests, you can use the exported shared client:
 
@@ -135,6 +151,8 @@ Fields:
 - `MaxRedirects?: number` — Maximum redirect hops when `FollowRedirects` is enabled. Default: `5`.
 - `TimeoutMs?: number` — Aborts the request if headers or body transfer exceed the given number of milliseconds.
 - `Signal?: AbortSignal` — Cancels the request using a standard abort signal.
+- `Agent?: http.Agent | https.Agent` — A caller-owned external Agent used for HTTP/1.1 requests. This supports packages such as `https-proxy-agent` and `socks-proxy-agent`; with no `CreateConnection`, `auto` stays on HTTP/1.1 and explicit `http/2`/`http/3` is rejected.
+- `CreateConnection?: (Options: SecureConnectionOptions) => Promise<Duplex> | Duplex` — Returns an open raw tunnel to `Options.Hostname` and `Options.Port`. Enables HTTPS HTTP/1.1 and HTTP/2 requests through custom proxy transports. HTTP/2 sessions are isolated per callback instance.
 
 ### HTTPSResponse
 

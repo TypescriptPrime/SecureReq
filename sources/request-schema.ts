@@ -1,6 +1,6 @@
 import * as Zod from 'zod'
 import { AvailableTLSCiphers, DefaultSupportedCompressions } from './constants.js'
-import { IsAbortSignal, IsStreamingPayload } from './utils.js'
+import { IsAbortSignal, IsHTTPAgent, IsStreamingPayload } from './utils.js'
 import type { HTTPSRequestOptions, SecureReqOptions } from './type.js'
 
 const HTTPCompressionAlgorithmSchema = Zod.enum(DefaultSupportedCompressions)
@@ -36,6 +36,12 @@ export const RequestOptionsSchema = Zod.strictObject({
   TimeoutMs: Zod.number().finite().positive().optional(),
   Signal: Zod.custom<AbortSignal>(Value => IsAbortSignal(Value), {
     message: 'Signal must be an AbortSignal',
+  }).optional(),
+  Agent: Zod.custom<import('node:http').Agent | import('node:https').Agent>(Value => IsHTTPAgent(Value), {
+    message: 'Agent must be a Node.js HTTP or HTTPS Agent',
+  }).optional(),
+  CreateConnection: Zod.custom<NonNullable<HTTPSRequestOptions['CreateConnection']>>(Value => typeof Value === 'function', {
+    message: 'CreateConnection must be a function',
   }).optional(),
 })
 

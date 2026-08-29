@@ -14,5 +14,6 @@ export type {
   HTTPSRequestOptions,
   HTTPSResponse,
   OriginCapabilities,
+  SecureConnectionOptions,
   SecureReqOptions,
 } from './type.js'

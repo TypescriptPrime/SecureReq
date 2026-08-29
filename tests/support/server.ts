@@ -1,6 +1,7 @@
 import * as HTTP from 'node:http'
 import * as HTTP2 from 'node:http2'
 import * as HTTPS from 'node:https'
+import * as TLS from 'node:tls'
 import * as ZLib from 'node:zlib'
 import { CreateTestTLSCertificate } from './tls.js'
 import type { HTTPCompressionAlgorithm } from '@/index.js'
@@ -279,9 +280,12 @@ async function StartServer(
 ): Promise<TestServer> {
   let IsClosed = false
   let SecureConnectionCount = 0
+  const SecureSockets = new Set<TLS.TLSSocket>()
 
-  Server.on('secureConnection', () => {
+  Server.on('secureConnection', Socket => {
     SecureConnectionCount += 1
+    SecureSockets.add(Socket)
+    Socket.once('close', () => SecureSockets.delete(Socket))
   })
 
   try {
@@ -321,6 +325,11 @@ async function StartServer(
       }
 
       IsClosed = true
+      for (const Socket of SecureSockets) {
+        Socket.destroy()
+      }
+
+      ;(Server as TestNodeServer & { closeAllConnections?: () => void }).closeAllConnections?.()
 
       await new Promise<void>((Resolve, Reject) => {
         Server.close(Error => {

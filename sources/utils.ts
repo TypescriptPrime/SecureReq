@@ -131,6 +131,12 @@ export function IsAbortSignal(Value: unknown): Value is AbortSignal {
     && typeof (Value as AbortSignal).removeEventListener === 'function'
 }
 
+export function IsHTTPAgent(Value: unknown): Value is import('node:http').Agent | import('node:https').Agent {
+  return typeof Value === 'object'
+    && Value !== null
+    && typeof (Value as Record<string, unknown>)['addRequest'] === 'function'
+}
+
 export function IsAsyncIterable(Value: unknown): Value is AsyncIterable<HTTPSRequestPayloadChunk> {
   return typeof Value === 'object' && Value !== null && Symbol.asyncIterator in Value
 }

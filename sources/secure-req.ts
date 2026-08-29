@@ -2,6 +2,7 @@ import * as HTTP from 'node:http'
 import * as HTTP2 from 'node:http2'
 import * as HTTPS from 'node:https'
 import { Readable } from 'node:stream'
+import type { Duplex } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import * as TLS from 'node:tls'
 import {
@@ -74,6 +75,8 @@ export class SecureReq {
   private readonly HTTP2SessionCache = new Map<string, HTTP2.ClientHttp2Session>()
   private readonly PendingHTTP2SessionCache = new Map<string, Promise<HTTP2.ClientHttp2Session>>()
   private readonly HTTP2SessionRefCounts = new WeakMap<HTTP2.ClientHttp2Session, number>()
+  private readonly TransportIds = new WeakMap<object, string>()
+  private NextTransportId = 0
 
   public constructor(Options: SecureReqOptions = {}) {
     const ParsedOptions = SecureReqOptionsSchema.parse(Options)
@@ -93,6 +96,8 @@ export class SecureReq {
       FollowRedirects: ParsedOptions.DefaultOptions?.FollowRedirects ?? false,
       MaxRedirects: ParsedOptions.DefaultOptions?.MaxRedirects ?? 5,
       TimeoutMs: ParsedOptions.DefaultOptions?.TimeoutMs,
+      Agent: ParsedOptions.DefaultOptions?.Agent,
+      CreateConnection: ParsedOptions.DefaultOptions?.CreateConnection,
     }
 
     this.SupportedCompressions = (ParsedOptions.SupportedCompressions?.length ? ParsedOptions.SupportedCompressions : DefaultSupportedCompressions)
@@ -126,16 +131,19 @@ export class SecureReq {
 
     const Protocol = this.ResolveTransportProtocol(Url, MergedOptions)
     const PreconnectedTransport = this.ShouldNegotiateSecureTransport(Url, MergedOptions, Protocol)
-      ? await this.NegotiateSecureTransport(Url, MergedOptions)
+      ? await this.NegotiateSecureTransport(Url, MergedOptions, Protocol)
       : undefined
 
     if (PreconnectedTransport?.Protocol === 'http/1.1') {
-      if (MergedOptions.PreferredProtocol === 'http/2' || MergedOptions.PreferredProtocol === 'http/3') {
-        PreconnectedTransport.Socket.destroy()
-        throw new HTTP2NegotiationError('Origin did not negotiate HTTP/2 via ALPN')
+      if (Protocol === 'http/2') {
+        if (MergedOptions.PreferredProtocol === 'http/2' || MergedOptions.PreferredProtocol === 'http/3') {
+          PreconnectedTransport.Socket.destroy()
+          throw new HTTP2NegotiationError('Origin did not negotiate HTTP/2 via ALPN')
+        }
+
+        this.MarkOriginAsHTTP1Only(Url)
       }
 
-      this.MarkOriginAsHTTP1Only(Url)
       return await this.RequestWithHTTP1(Url, MergedOptions, ExpectedAs, RedirectCount, PreconnectedTransport.Socket)
     }
 
@@ -208,6 +216,10 @@ export class SecureReq {
       throw new Error('http/2 and http/3 negotiation require an HTTPS URL')
     }
 
+    if ((Options.PreferredProtocol === 'http/2' || Options.PreferredProtocol === 'http/3') && Options.Agent && !Options.CreateConnection) {
+      throw new Error('http/2 and http/3 requests with Agent require CreateConnection to establish a proxy tunnel')
+    }
+
     if (Options.Payload !== undefined && PayloadEnabledMethods.has(Options.HttpMethod ?? 'GET') === false) {
       throw new Error('Request payload is only supported for GET, POST, PUT, PATCH, and OPTIONS methods')
     }
@@ -215,6 +227,10 @@ export class SecureReq {
 
   private ResolveTransportProtocol(Url: URL, Options: HTTPSRequestOptions): 'http/1.1' | 'http/2' {
     if (Url.protocol !== 'https:') {
+      return 'http/1.1'
+    }
+
+    if (Options.Agent && !Options.CreateConnection && Options.PreferredProtocol === 'auto') {
       return 'http/1.1'
     }
 
@@ -396,9 +412,10 @@ export class SecureReq {
     }
 
     if (Url.protocol === 'https:') {
-      const Agent = PreconnectedSocket ? new HTTPS.Agent({ keepAlive: false }) : undefined
+      const TemporaryAgent = PreconnectedSocket ? new HTTPS.Agent({ keepAlive: false }) : undefined
+      const Agent = TemporaryAgent ?? Options.Agent
 
-      if (Agent) {
+      if (PreconnectedSocket && Agent) {
         Agent.createConnection = () => PreconnectedSocket
       }
 
@@ -413,15 +430,18 @@ export class SecureReq {
         rejectUnauthorized: Options.TLS?.RejectUnauthorized,
       }, Response => {
         Response.once('close', () => {
-          Agent?.destroy()
+          TemporaryAgent?.destroy()
         })
         OnResponse(Response)
       }).once('error', () => {
-        Agent?.destroy()
+        TemporaryAgent?.destroy()
       })
     }
 
-    return HTTP.request(BaseOptions, OnResponse)
+    return HTTP.request({
+      ...BaseOptions,
+      agent: Options.Agent,
+    }, OnResponse)
   }
 
   private async RequestWithHTTP2<E extends ExpectedAsKey>(
@@ -569,7 +589,7 @@ export class SecureReq {
           Protocol: 'http/2',
           Socket: PreconnectedSocket,
         } satisfies NegotiatedSecureTransport
-        : await this.NegotiateSecureTransport(Url, Options)
+        : await this.NegotiateSecureTransport(Url, Options, 'http/2')
 
       if (NegotiatedTransport.Protocol !== 'http/2') {
         NegotiatedTransport.Socket.destroy()
@@ -639,7 +659,24 @@ export class SecureReq {
   }
 
   private GetHTTP2SessionKey(Url: URL, Options: HTTPSRequestOptions): string {
-    return `${GetOriginKey(Url)}|${SerializeTLSOptions(Options.TLS)}`
+    return `${GetOriginKey(Url)}|${SerializeTLSOptions(Options.TLS)}|${this.GetTransportId(Options)}`
+  }
+
+  private GetTransportId(Options: HTTPSRequestOptions): string {
+    const Transport = Options.CreateConnection ?? Options.Agent
+
+    if (Transport === undefined) {
+      return 'default'
+    }
+
+    const ExistingId = this.TransportIds.get(Transport)
+    if (ExistingId) {
+      return ExistingId
+    }
+
+    const TransportId = `transport-${this.NextTransportId++}`
+    this.TransportIds.set(Transport, TransportId)
+    return TransportId
   }
 
   private InvalidateHTTP2Session(Url: URL, Options: HTTPSRequestOptions, Session?: HTTP2.ClientHttp2Session): void {
@@ -917,7 +954,24 @@ export class SecureReq {
     return TransportError
   }
 
-  private async NegotiateSecureTransport(Url: URL, Options: HTTPSRequestOptions): Promise<NegotiatedSecureTransport> {
+  private async NegotiateSecureTransport(
+    Url: URL,
+    Options: HTTPSRequestOptions,
+    Protocol: 'http/1.1' | 'http/2',
+  ): Promise<NegotiatedSecureTransport> {
+    let TunnelSocket: Duplex | undefined
+
+    if (Options.CreateConnection) {
+      try {
+        TunnelSocket = await Options.CreateConnection({
+          Hostname: Url.hostname,
+          Port: Number(Url.port || 443),
+        })
+      } catch (Cause) {
+        throw new HTTP2NegotiationError('Failed to establish proxy tunnel', { cause: this.EnhanceTransportError(Cause, Options) })
+      }
+    }
+
     return await new Promise<NegotiatedSecureTransport>((Resolve, Reject) => {
       const Socket = TLS.connect({
         host: Url.hostname,
@@ -928,7 +982,8 @@ export class SecureReq {
         ciphers: Options.TLS?.Ciphers?.join(':'),
         ecdhCurve: Options.TLS?.KeyExchanges?.join(':'),
         rejectUnauthorized: Options.TLS?.RejectUnauthorized,
-        ALPNProtocols: ['h2', 'http/1.1'],
+        ALPNProtocols: Protocol === 'http/2' ? ['h2', 'http/1.1'] : ['http/1.1'],
+        ...(TunnelSocket ? { socket: TunnelSocket } : {}),
       })
 
       const Cleanup = () => {
@@ -979,8 +1034,12 @@ export class SecureReq {
     Options: HTTPSRequestOptions,
     Protocol: 'http/1.1' | 'http/2',
   ): boolean {
-    if (Url.protocol !== 'https:' || Protocol !== 'http/2') {
+    if (Url.protocol !== 'https:') {
       return false
+    }
+
+    if (Protocol === 'http/1.1') {
+      return Options.CreateConnection !== undefined && Options.Agent === undefined
     }
 
     return this.HasReusableHTTP2Session(Url, Options) === false
